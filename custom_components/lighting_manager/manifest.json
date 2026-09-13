@@ -1,0 +1,14 @@
+{
+  "domain": "lighting_manager",
+  "name": "Lighting Manager",
+  "version": "0.1.0",
+  "documentation": "https://github.com/hsolgaard/lighting-manager",
+  "issue_tracker": "https://github.com/hsolgaard/lighting-manager/issues",
+  "codeowners": ["@hsolgaard"],
+  "config_flow": true,
+  "iot_class": "calculated",
+  "integration_type": "hub",
+  "requirements": [],
+  "dependencies": [],
+  "single_config_entry": true
+}
