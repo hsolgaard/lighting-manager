@@ -17,6 +17,7 @@ from homeassistant.helpers.event import (
     async_track_state_change_event,
     async_track_time_interval,
 )
+from homeassistant.helpers.start import async_at_started
 from homeassistant.util import dt as dt_util
 
 from . import registry
@@ -73,19 +74,30 @@ class LightingManagerCoordinator:
         self._first_seen_missing: dict[str, datetime] = {}
         self._unsub_state: callback | None = None
         self._unsub_interval: callback | None = None
+        self._unsub_scheduler_start: callback | None = None
 
     async def async_setup(self) -> None:
         await self.store.async_load()
         await registry.async_ensure_type_labels_exist(self.hass)
         await self.countdown.async_restore_all()
 
-        niels_faber = NielsFaberSchedulerProvider(self.hass)
-        if niels_faber.is_available():
-            await niels_faber.async_setup()
-            self.scheduler = niels_faber
-            _LOGGER.info("Niels Faber Scheduler detected; schedule features enabled")
-        else:
-            _LOGGER.info("No supported scheduler provider installed; scheduling disabled (PRD §4.5)")
+        # Real bug found 2026-09-14: checking niels_faber.is_available()
+        # inline, right here, meant that on a cold boot this ran before
+        # the Scheduler Component (a separate custom integration) had
+        # necessarily created its switch.schedule_* entities yet -
+        # integration setup order across custom_components isn't
+        # guaranteed. Since this was only ever checked once, a false
+        # negative on that one check disabled scheduling for the rest of
+        # the HA run: every light showed 0 schedules regardless of what
+        # was actually configured, confirmed live against Hans's real
+        # switch.schedule_* entities (all correctly hex-formatted, so the
+        # reverse-index regex wasn't the problem - the detection timing
+        # was). async_at_started() defers this check to when HA has
+        # actually finished starting (or runs it immediately if it
+        # already has, e.g. on a config entry reload rather than a cold
+        # boot), so the scheduler is detected reliably regardless of
+        # load order.
+        self._unsub_scheduler_start = async_at_started(self.hass, self._async_setup_scheduler)
 
         self._unsub_state = async_track_state_change_event(
             self.hass, self._async_all_managed_entity_ids(), self._async_on_light_state_change
@@ -96,7 +108,22 @@ class LightingManagerCoordinator:
             self.hass, self._async_periodic_reconcile, timedelta(minutes=15)
         )
 
+    async def _async_setup_scheduler(self, hass: HomeAssistant) -> None:
+        niels_faber = NielsFaberSchedulerProvider(self.hass)
+        if niels_faber.is_available():
+            await niels_faber.async_setup()
+            self.scheduler = niels_faber
+            _LOGGER.info("Niels Faber Scheduler detected; schedule features enabled")
+        else:
+            _LOGGER.info("No supported scheduler provider installed; scheduling disabled (PRD §4.5)")
+
     async def async_unload(self) -> None:
+        if self._unsub_scheduler_start is not None:
+            # Cancels the pending async_at_started callback if HA hasn't
+            # finished starting yet and this entry is unloaded/reloaded
+            # first - avoids a late scheduler setup racing the teardown
+            # below.
+            self._unsub_scheduler_start()
         if self._unsub_state is not None:
             self._unsub_state()
         if self._unsub_interval is not None:

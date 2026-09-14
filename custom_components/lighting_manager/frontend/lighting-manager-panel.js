@@ -95,8 +95,33 @@ const INBOX_LABELS = {
 
 const REFRESH_INTERVAL_MS = 15000;
 
+// Friendly toast text per websocket action type. Added 2026-09-14: live
+// testing found several buttons (e.g. "Set type") gave no acknowledgement
+// at all that anything happened - only a silent list refresh. Falls back
+// to a generic "Done" for anything not listed here rather than requiring
+// every call site to remember to pass one.
+const ACTION_SUCCESS_MESSAGES = {
+  adopt_light: "Light adopted",
+  ignore_light: "Light ignored",
+  unignore_light: "Light un-ignored — back in the Inbox",
+  rename_light: "Name updated",
+  move_light: "Area updated",
+  set_light_type: "Type updated",
+  set_dashboard_included: "Dashboard setting updated",
+  start_countdown: "Countdown started",
+  cancel_countdown: "Countdown cancelled",
+  promote_switch: "Switch added as a light",
+};
+
 const CSS_TEXT = `
-  :host { display: block; }
+  /* Real bug found 2026-09-14 during live testing: this panel has no
+   * Shadow DOM (deliberately - see the file header), so ":host" here
+   * was always dead code (it only means anything inside a shadow
+   * root). Nothing was actually setting height on the custom element
+   * itself, so it collapsed to its content's height instead of filling
+   * the available viewport - the "lots of scrolling" bug Hans hit
+   * live. The real host element is the custom element tag itself. */
+  lighting-manager-panel { display: block; height: 100%; }
   .lm-root {
     display: flex;
     flex-direction: column;
@@ -244,6 +269,26 @@ const CSS_TEXT = `
   }
   .lm-overlay-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 0; border-bottom: 1px solid var(--divider-color); }
   .lm-badge { display: inline-block; padding: 1px 8px; border-radius: 10px; font-size: 0.75em; background: var(--secondary-background-color); color: var(--secondary-text-color); }
+  .lm-toast {
+    position: fixed;
+    left: 50%;
+    bottom: 24px;
+    transform: translateX(-50%);
+    background: var(--primary-text-color, #333);
+    color: var(--primary-background-color, #fff);
+    padding: 10px 18px;
+    border-radius: 6px;
+    font-size: 0.9em;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+    z-index: 20;
+    opacity: 0;
+    transition: opacity 0.15s ease-in-out;
+    pointer-events: none;
+    max-width: calc(100% - 32px);
+    text-align: center;
+  }
+  .lm-toast.visible { opacity: 1; }
+  .lm-checkbox-row.lm-toolbar-toggle { gap: 4px; font-size: 0.9em; color: var(--secondary-text-color); }
 `;
 
 class LightingManagerPanel extends HTMLElement {
@@ -258,6 +303,8 @@ class LightingManagerPanel extends HTMLElement {
     this._sortDirection = "asc";
     this._filterText = "";
     this._pendingAreaId = undefined; // undefined = "not touched yet" for the detail form
+    this._showIgnored = false; // Table view hides ignored lights by default (2026-09-14 feedback)
+    this._toastTimer = null;
   }
 
   setConfig() {}
@@ -334,11 +381,33 @@ class LightingManagerPanel extends HTMLElement {
       await this._hass.callWS({ type: `lighting_manager/${type}`, ...extra });
       this._clearError();
       await this._refreshAll();
+      this._showToast(ACTION_SUCCESS_MESSAGES[type] || "Done");
       return true;
     } catch (err) {
       this._showError(`${type} failed: ${this._formatError(err)}`);
       return false;
     }
+  }
+
+  _showToast(message) {
+    if (!this._toastEl) {
+      this._toastEl = document.createElement("div");
+      this._toastEl.className = "lm-toast";
+      this.appendChild(this._toastEl);
+    }
+    this._toastEl.textContent = message;
+    // Restart the fade-in even if a toast is already visible, so back-to-
+    // back actions (e.g. Adopt, then Ignore on the next item) each get
+    // their own visible confirmation rather than the timer silently
+    // extending.
+    this._toastEl.classList.remove("visible");
+    // eslint-disable-next-line no-unused-expressions
+    this._toastEl.offsetHeight; // force reflow so the class removal takes effect before re-adding
+    this._toastEl.classList.add("visible");
+    if (this._toastTimer) clearTimeout(this._toastTimer);
+    this._toastTimer = setTimeout(() => {
+      this._toastEl.classList.remove("visible");
+    }, 2500);
   }
 
   _formatError(err) {
@@ -401,6 +470,26 @@ class LightingManagerPanel extends HTMLElement {
     spacer.className = "lm-spacer";
     toolbar.appendChild(spacer);
 
+    // Show-ignored toggle: Table-view only. Added 2026-09-14 - ignoring a
+    // light previously left it sitting in the table forever with no way
+    // to tell it had been dealt with; it now disappears by default but
+    // stays reachable here for un-ignoring later.
+    this._showIgnoredWrap = document.createElement("div");
+    this._showIgnoredWrap.className = "lm-checkbox-row lm-toolbar-toggle";
+    this._showIgnoredCheckbox = document.createElement("input");
+    this._showIgnoredCheckbox.type = "checkbox";
+    this._showIgnoredCheckbox.id = "lm-show-ignored";
+    this._showIgnoredCheckbox.checked = this._showIgnored;
+    this._showIgnoredCheckbox.addEventListener("change", () => {
+      this._showIgnored = this._showIgnoredCheckbox.checked;
+      this._renderView();
+    });
+    const showIgnoredLabel = document.createElement("label");
+    showIgnoredLabel.htmlFor = "lm-show-ignored";
+    showIgnoredLabel.textContent = "Show ignored";
+    this._showIgnoredWrap.append(this._showIgnoredCheckbox, showIgnoredLabel);
+    toolbar.appendChild(this._showIgnoredWrap);
+
     this._filterInput = document.createElement("input");
     this._filterInput.type = "search";
     this._filterInput.placeholder = "Filter…";
@@ -412,7 +501,7 @@ class LightingManagerPanel extends HTMLElement {
     toolbar.appendChild(this._filterInput);
 
     toolbar.appendChild(
-      this._makeButton("Add a switch as a light…", () => this._openPromoteSwitchDialog())
+      this._makeButton("Add a switch as a light", () => this._openPromoteSwitchDialog())
     );
     toolbar.appendChild(this._makeButton("Refresh", () => this._refreshAll()));
 
@@ -456,6 +545,22 @@ class LightingManagerPanel extends HTMLElement {
     for (const [view, btn] of Object.entries(this._tabButtons)) {
       btn.classList.toggle("active", view === this._view);
     }
+    this._updateToolbarVisibility();
+  }
+
+  _updateToolbarVisibility() {
+    // "Show ignored" only makes sense on the Table view - ignored lights
+    // never appear in the Inbox regardless (they're steady-state, not
+    // something needing attention).
+    this._showIgnoredWrap.hidden = this._view !== "table";
+    // ha-data-table has its own built-in search box (visible once rows
+    // are rendered into it); the toolbar filter next to it was a second,
+    // confusingly-duplicate search box on the Table view (2026-09-14
+    // feedback). Keep the toolbar filter for the Inbox view (which has
+    // no native search of its own) and for the Table view's plain-<table>
+    // fallback, which also has no built-in search.
+    const nativeTableActive = this._view === "table" && !!customElements.get("ha-data-table");
+    this._filterInput.hidden = nativeTableActive;
   }
 
   _makeButton(label, onClick, { primary = false, disabled = false } = {}) {
@@ -532,13 +637,20 @@ class LightingManagerPanel extends HTMLElement {
 
   _renderTable() {
     this._bodyEl.innerHTML = "";
-    const filtered = this._applyFilter(this._lights);
+    // Real feedback (2026-09-14): ignoring a light (e.g. a camera's IR
+    // "light") left it sitting in the table forever, indistinguishable
+    // from anything else - ignoring needs to actually remove it from the
+    // main view, with "Show ignored" as the way back.
+    const visibleLights = this._showIgnored
+      ? this._lights
+      : this._lights.filter((l) => !l.ignored);
+    const filtered = this._applyFilter(visibleLights);
 
     if (filtered.length === 0) {
       const empty = document.createElement("div");
       empty.className = "lm-empty";
-      empty.textContent = this._lights.length === 0
-        ? "No eligible lights found yet."
+      empty.textContent = visibleLights.length === 0
+        ? (this._showIgnored ? "No lights found yet." : "No lights found yet (or everything is ignored — try “Show ignored”).")
         : "No lights match your filter.";
       this._bodyEl.appendChild(empty);
       return;
@@ -653,19 +765,43 @@ class LightingManagerPanel extends HTMLElement {
 
   // -- Inbox view ---------------------------------------------------------
 
+  _applyInboxFilter(items) {
+    // The toolbar filter previously only applied to the Table view -
+    // typing into it while on the Inbox silently did nothing
+    // (2026-09-14 feedback: the Inbox needs area shown *and* to actually
+    // be filterable, since it's often the longer of the two lists).
+    if (!this._filterText) return items;
+    const needle = this._filterText;
+    return items.filter((item) => {
+      const light = this._lightsById.get(item.entity_id);
+      const haystack = [
+        light ? light.name : "",
+        item.entity_id,
+        light ? this._areaName(light.area_id) : "",
+        INBOX_LABELS[item.condition] || item.condition,
+      ]
+        .join(" ")
+        .toLowerCase();
+      return haystack.includes(needle);
+    });
+  }
+
   _renderInbox() {
     this._bodyEl.innerHTML = "";
+    const inboxItems = this._applyInboxFilter(this._inbox);
 
-    if (this._inbox.length === 0) {
+    if (inboxItems.length === 0) {
       const empty = document.createElement("div");
       empty.className = "lm-empty";
-      empty.textContent = "Inbox is empty — nothing needs attention.";
+      empty.textContent = this._inbox.length === 0
+        ? "Inbox is empty — nothing needs attention."
+        : "No Inbox items match your filter.";
       this._bodyEl.appendChild(empty);
       return;
     }
 
     const groups = new Map();
-    for (const item of this._inbox) {
+    for (const item of inboxItems) {
       if (!groups.has(item.condition)) groups.set(item.condition, []);
       groups.get(item.condition).push(item);
     }
@@ -719,10 +855,24 @@ class LightingManagerPanel extends HTMLElement {
 
     const meta = document.createElement("span");
     meta.className = "meta";
+    // Real feedback (2026-09-14): the Inbox showed no area at all for
+    // most conditions (just the raw entity_id, which duplicates the row
+    // below it in most fallback cases) - area is the single most useful
+    // thing for identifying *which* light this is, so it's now always
+    // shown first, with condition-specific detail appended after it.
+    const areaText = light ? `area: ${this._areaName(light.area_id)}` : null;
+    let extra = null;
     if (item.condition === "area_mismatch" && item.detail) {
-      meta.textContent = `device: ${this._areaName(item.detail.device_area)} · entity: ${this._areaName(item.detail.entity_area)}`;
+      extra = `device: ${this._areaName(item.detail.device_area)} · entity: ${this._areaName(item.detail.entity_area)}`;
     } else if (item.condition === "missing" && item.detail && item.detail.since) {
-      meta.textContent = `since ${new Date(item.detail.since).toLocaleString()}`;
+      extra = `since ${new Date(item.detail.since).toLocaleString()}`;
+    }
+    if (areaText && extra) {
+      meta.textContent = `${areaText} · ${extra}`;
+    } else if (extra) {
+      meta.textContent = extra;
+    } else if (areaText) {
+      meta.textContent = areaText;
     } else {
       meta.textContent = item.entity_id;
     }
@@ -730,7 +880,11 @@ class LightingManagerPanel extends HTMLElement {
 
     if (item.condition === "new_light") {
       row.appendChild(
-        this._makeButton("Adopt…", (e) => {
+        // "Adopt…" read as truncated text rather than a label (2026-09-14
+        // feedback); this opens the detail drawer to review/edit the
+        // light before adopting it, so "Review" says what actually
+        // happens on click.
+        this._makeButton("Review", (e) => {
           e.stopPropagation();
           this._selectEntity(item.entity_id);
         }, { primary: true })
@@ -753,7 +907,7 @@ class LightingManagerPanel extends HTMLElement {
       );
     } else if (item.condition === "unassigned") {
       row.appendChild(
-        this._makeButton("Set area…", (e) => {
+        this._makeButton("Set area", (e) => {
           e.stopPropagation();
           this._selectEntity(item.entity_id);
         })

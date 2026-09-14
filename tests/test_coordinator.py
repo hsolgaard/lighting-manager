@@ -8,7 +8,7 @@ discovery only scanned the light.* domain.
 from __future__ import annotations
 
 import pytest
-from homeassistant.core import HomeAssistant
+from homeassistant.core import CoreState, EVENT_HOMEASSISTANT_STARTED, HomeAssistant
 from homeassistant.helpers import entity_registry as er
 
 from custom_components.lighting_manager.const import (
@@ -257,6 +257,42 @@ async def test_set_dashboard_included_persists(
 
     view = next(v for v in coordinator.async_list_lights() if v.entity_id == "light.spots")
     assert view.dashboard_included is False
+
+
+async def test_scheduler_detected_after_late_ha_start(hass: HomeAssistant) -> None:
+    """Regression test for the real 0-schedules-for-everyone bug (2026-09-14).
+
+    Checking niels_faber.is_available() inline during Lighting Manager's
+    own async_setup() only caught the Scheduler Component if its
+    switch.schedule_* entities already existed at that exact moment -
+    not guaranteed on a cold HA boot, since custom_components load order
+    isn't ordered relative to each other. A false negative there was
+    permanent for the rest of the HA run (checked once, never retried),
+    which is exactly what Hans hit live: confirmed real switch.schedule_*
+    entities existed, correctly hex-formatted, yet every light showed 0
+    schedules. Simulates that race here: HA isn't "started" yet when the
+    coordinator sets up, the scheduler entity doesn't exist until after,
+    and detection should still succeed once HA finishes starting.
+    """
+    hass.set_state(CoreState.not_running)
+    coord = LightingManagerCoordinator(hass)
+    await coord.async_setup()
+    assert coord.scheduler is None  # not detected yet - HA hasn't started
+
+    # The Scheduler Component's entity only appears "later", before HA
+    # finishes starting (matching a real cold-boot ordering).
+    hass.states.async_set(
+        "switch.schedule_abc123",
+        "on",
+        {"entities": ["light.kitchen"], "weekdays": [], "timeslots": [], "actions": []},
+    )
+    hass.bus.async_fire(EVENT_HOMEASSISTANT_STARTED)
+    await hass.async_block_till_done()
+
+    assert coord.scheduler is not None
+    assert len(coord.scheduler.async_schedules_for_entity("light.kitchen")) == 1
+
+    await coord.async_unload()
 
 
 async def test_rename_on_registry_less_entity_raises(
