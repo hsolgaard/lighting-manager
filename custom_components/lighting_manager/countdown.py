@@ -96,16 +96,37 @@ class CountdownManager:
     def is_active(self, entity_id: str) -> bool:
         return entity_id in self._active
 
-    async def async_start(self, entity_id: str, minutes: float) -> None:
-        """Start (or replace) a countdown: turn the light on now, off at expiry.
+    async def async_start(
+        self, entity_id: str, minutes: float, *, turn_on_first: bool = True
+    ) -> None:
+        """Start (or replace) a countdown.
 
-        PRD §20 also describes a "Turn off in..." variant for a light
-        that's already on - same engine, the only difference is whether
-        we issue light.turn_on first. Both are exposed via the
-        `turn_on_first` argument on the websocket command layer (api.py),
-        which is the natural place for that UI-facing choice to live.
+        turn_on_first=True (the default) implements PRD §20's primary
+        "Turn on for..." interaction: turn the light on now, off at
+        expiry. turn_on_first=False implements the "Turn off in..."
+        variant for a light that's already on - same engine, just skips
+        the turn_on call. Exposed as the `turn_on_first` argument on the
+        websocket command (api.py), which is the natural place for that
+        UI-facing choice to live.
+
+        The turn_on call (when requested) happens before _schedule()
+        registers the external-state-change listener below, precisely
+        so it can't be mistaken for an external action that cancels the
+        countdown it's starting.
         """
         await self._async_cancel_internal(entity_id, persist=False)
+
+        if turn_on_first:
+            self._self_caused.add(entity_id)
+            try:
+                await self._hass.services.async_call(
+                    "light",
+                    "turn_on",
+                    {"entity_id": entity_id},
+                    blocking=True,
+                )
+            finally:
+                self._self_caused.discard(entity_id)
 
         expires_at = dt_util.utcnow() + timedelta(minutes=minutes)
         await self._store.async_set_countdown(

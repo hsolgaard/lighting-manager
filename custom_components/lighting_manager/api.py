@@ -177,11 +177,14 @@ async def ws_promote_switch(hass: HomeAssistant, connection, msg) -> None:
         vol.Required("type"): f"{DOMAIN}/start_countdown",
         vol.Required("entity_id"): str,
         vol.Required("minutes"): vol.Coerce(float),
+        vol.Optional("turn_on_first", default=True): bool,
     }
 )
 @websocket_api.async_response
 async def ws_start_countdown(hass: HomeAssistant, connection, msg) -> None:
-    await _coordinator(hass).countdown.async_start(msg["entity_id"], msg["minutes"])
+    await _coordinator(hass).countdown.async_start(
+        msg["entity_id"], msg["minutes"], turn_on_first=msg["turn_on_first"]
+    )
     connection.send_result(msg["id"])
 
 
