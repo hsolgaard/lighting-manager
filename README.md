@@ -38,13 +38,26 @@ What's implemented vs. still to build:
   command (§29, §38 investigation #6)
 - Config flow (single-instance, no setup questions) (§28)
 
+- Table view (§8) and Inbox (§16) frontend: sortable/filterable table of
+  all lights plus a grouped inbox with condition-specific quick actions,
+  both backed by a shared detail drawer (rename, move, set type, adopt/
+  ignore/un-ignore, dashboard toggle, countdown start/cancel, promote a
+  switch). Built in plain JS against HA's own native components
+  (`ha-data-table`, `ha-area-picker`) rather than Lit - see the header
+  comment in `frontend/lighting-manager-panel.js` for why, and
+  `frontend/README.md` for what still needs live-instance verification.
+- `unignore_light` action (backend + websocket command) - added while
+  building the Inbox UI; not in the original PRD, but an Ignore button
+  with no way back would be a one-way trap.
+
 ### Not yet built
 
-- The actual Rooms / Table / Inbox frontend (currently a placeholder panel
-  that proves the websocket plumbing works - see
-  `custom_components/lighting_manager/frontend/README.md`)
+- Rooms view (§7) - Area-grouped cards, drag/drop. Table + Inbox
+  (immediately above) covers the same ground for now; Rooms is a
+  different presentation of the same data, not new backend work.
 - First-run bulk adoption UI (§10) - backend actions (`adopt_light`,
-  `ignore_light`) exist; there's no bulk review screen yet
+  `ignore_light`) exist and the Inbox surfaces new lights one at a time;
+  there's no dedicated bulk-review screen yet.
 - Bulk operations (§9)
 - Schedule presentation UI (§19) and the specialist lighting dashboard (§22)
 - Hardware/entity replacement workflow (§24) - explicitly P1
@@ -107,8 +120,23 @@ One real, currently-unhandled gap the suite surfaces rather than hides:
 an entity with no entity-registry entry at all (e.g. some template/YAML
 lights - `stable_key_for_entity`'s own docstring acknowledges these exist).
 Every entity tested against Hans's real instance has had a registry entry,
-so this hasn't been hit in practice, but it's an unhandled crash waiting for
-whoever adopts a registry-less light first. See
-`tests/test_coordinator.py::test_rename_on_registry_less_entity_raises` -
-worth a product decision (silent no-op vs. a friendly websocket error) before
-it's fixed.
+so this hasn't been hit in practice. Decision (2026-09-14): left as-is for
+now rather than fixed, since it doesn't affect any light Hans actually has.
+Consequence if it is hit: `ws_rename_light`/`ws_move_light` are wrapped in
+`@websocket_api.async_response`, so the `KeyError` doesn't crash HA or the
+integration - it's caught by HA's own websocket message-handling wrapper,
+logged as an unhandled exception in the HA log, and the frontend gets back
+a generic `unknown_error` for that one command (the new panel's error
+banner will at least show *something* went wrong, rather than nothing).
+See `tests/test_coordinator.py::test_rename_on_registry_less_entity_raises`
+if this needs revisiting later.
+
+Two more added while building the frontend, same "flag, don't silently
+guess" spirit:
+
+- `unignore_light` (mirrors `ignore_light` exactly) - not in the original
+  PRD, added because the Inbox's Ignore action needed a way back.
+- `const.py`'s `INBOX_BROKEN_SCHEDULE_REF` / `INBOX_PROVIDER_UNAVAILABLE`
+  are defined but `coordinator.async_build_inbox()` never actually emits
+  them yet - the Inbox UI handles them generically (falls back to the raw
+  condition string) in case that changes, but nothing produces them today.

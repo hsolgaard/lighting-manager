@@ -150,6 +150,24 @@ async def test_promoted_switch_not_double_counted_after_adoption(
     assert entity_ids.count(entity_id) == 1
 
 
+async def test_unignore_light_clears_ignored_flag(
+    hass: HomeAssistant, coordinator: LightingManagerCoordinator
+) -> None:
+    """Added alongside the real Inbox UI: Ignore needs a way back."""
+    hass.states.async_set("light.attic", "off")
+    await coordinator.async_ignore_light("light.attic")
+    assert "light.attic" not in {
+        item.entity_id for item in coordinator.async_build_inbox()
+    }
+
+    await coordinator.async_unignore_light("light.attic")
+
+    inbox = coordinator.async_build_inbox()
+    matching = [item for item in inbox if item.entity_id == "light.attic"]
+    assert len(matching) == 1
+    assert matching[0].condition == INBOX_NEW
+
+
 async def test_unassigned_light_appears_in_inbox_once_adopted(
     hass: HomeAssistant, coordinator: LightingManagerCoordinator
 ) -> None:

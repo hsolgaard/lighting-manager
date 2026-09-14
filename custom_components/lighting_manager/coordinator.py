@@ -257,6 +257,21 @@ class LightingManagerCoordinator:
         record.ignored = True
         await self.store.async_set_light(key, record)
 
+    async def async_unignore_light(self, entity_id: str) -> None:
+        """Counterpart to async_ignore_light.
+
+        Not in the original PRD/backend scope - added while building the
+        real Inbox UI, because an Ignore button with no way back would be
+        a one-way trap for whoever clicks it by mistake. Mirrors
+        async_ignore_light exactly; the light returns to the Inbox as
+        INBOX_NEW on the next async_build_inbox call, same as any other
+        never-adopted light.
+        """
+        key = registry.stable_key_for_entity(self.hass, entity_id)
+        record = self.store.get_light(key)
+        record.ignored = False
+        await self.store.async_set_light(key, record)
+
     async def async_move_light(self, entity_id: str, area_id: str) -> None:
         await registry.async_set_entity_area(self.hass, entity_id, area_id)
         key = registry.stable_key_for_entity(self.hass, entity_id)

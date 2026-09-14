@@ -31,6 +31,7 @@ def async_register_websocket_commands(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_list_promotable_switches)
     websocket_api.async_register_command(hass, ws_adopt_light)
     websocket_api.async_register_command(hass, ws_ignore_light)
+    websocket_api.async_register_command(hass, ws_unignore_light)
     websocket_api.async_register_command(hass, ws_move_light)
     websocket_api.async_register_command(hass, ws_rename_light)
     websocket_api.async_register_command(hass, ws_set_light_type)
@@ -102,6 +103,16 @@ async def ws_adopt_light(hass: HomeAssistant, connection, msg) -> None:
 @websocket_api.async_response
 async def ws_ignore_light(hass: HomeAssistant, connection, msg) -> None:
     await _coordinator(hass).async_ignore_light(msg["entity_id"])
+    connection.send_result(msg["id"])
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command(
+    {vol.Required("type"): f"{DOMAIN}/unignore_light", vol.Required("entity_id"): str}
+)
+@websocket_api.async_response
+async def ws_unignore_light(hass: HomeAssistant, connection, msg) -> None:
+    await _coordinator(hass).async_unignore_light(msg["entity_id"])
     connection.send_result(msg["id"])
 
 
