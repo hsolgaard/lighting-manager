@@ -81,6 +81,34 @@ custom_components/lighting_manager/
     lighting-manager-panel.js   placeholder panel (see its own README)
 ```
 
-No automated tests yet. Next step for anyone picking this up: install
-`pytest-homeassistant-custom-component` and add coverage for `coordinator.py`
-and `countdown.py` in particular, since those carry the actual product logic.
+### Testing
+
+```
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements-test.txt
+pytest
+```
+
+56 tests across `registry.py`, `storage.py`, `countdown.py`,
+`providers/scheduler/niels_faber.py`, `coordinator.py`, and a websocket-API
+smoke-test layer (`api.py`, including an admin-permission check manual
+testing didn't cover). See `tests/conftest.py` for the version caveat: this
+suite runs against `homeassistant==2024.3.1` (the newest release this
+project's package index could resolve), not the current core - it validates
+the integration's own logic, and would have caught both real bugs found so
+far (the Label id scheme, and `countdown.async_start()` never calling
+`light.turn_on`), but it isn't a substitute for testing against a live,
+current instance.
+
+One real, currently-unhandled gap the suite surfaces rather than hides:
+`registry.async_rename_entity` / `async_set_entity_area` call
+`entity_registry.async_update_entity()` directly, which raises `KeyError` for
+an entity with no entity-registry entry at all (e.g. some template/YAML
+lights - `stable_key_for_entity`'s own docstring acknowledges these exist).
+Every entity tested against Hans's real instance has had a registry entry,
+so this hasn't been hit in practice, but it's an unhandled crash waiting for
+whoever adopts a registry-less light first. See
+`tests/test_coordinator.py::test_rename_on_registry_less_entity_raises` -
+worth a product decision (silent no-op vs. a friendly websocket error) before
+it's fixed.

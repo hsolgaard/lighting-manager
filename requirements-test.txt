@@ -1,0 +1,22 @@
+# Test-only dependencies for the Lighting Manager integration.
+#
+# pytest-homeassistant-custom-component pins homeassistant==2024.3.1 at
+# this version - the newest combination this project's package index
+# could resolve at build time (see the Feasibility Review's "Live test
+# results" / automated-testing notes for what that gap means and
+# doesn't mean). Bumping either pin independently will likely break;
+# bump them together against a newer pytest-homeassistant-custom-component
+# release if you want to test against a newer HA core.
+pytest-homeassistant-custom-component==0.13.108
+
+# Pins around a real environment issue, not a Lighting Manager one:
+# HA's http component imports hass_nabucasa -> acme, and acme 2.8.0
+# uses the pre-2.0 josepy API (josepy.ComparableX509), which josepy>=2.0
+# removed. Without this pin, any test that spins up hass.http (the
+# websocket-API tests) fails with AttributeError on import, nothing to
+# do with this integration's own code.
+josepy==1.15.0
+
+# Home Assistant's zoneinfo-based time handling needs the IANA tzdata
+# database; not every base OS/container ships it.
+tzdata
