@@ -49,6 +49,7 @@ const LIGHT_TYPES = [
   "cabinet_light",
   "outdoor",
   "flood_light",
+  "strip_light",
   "lamp_plug",
   "decorative",
   "other",
@@ -64,6 +65,7 @@ const LIGHT_TYPE_LABELS = {
   cabinet_light: "Cabinet light",
   outdoor: "Outdoor",
   flood_light: "Flood light",
+  strip_light: "Strip light",
   lamp_plug: "Lamp plug",
   decorative: "Decorative",
   other: "Other",
@@ -230,6 +232,19 @@ const CSS_TEXT = `
   .lm-table tbody tr:hover { background: var(--secondary-background-color); }
   .lm-table tbody tr.selected { background: rgba(var(--rgb-primary-color, 3,169,244), 0.12); }
   .lm-empty { padding: 24px; text-align: center; color: var(--secondary-text-color); }
+  .lm-inbox-list-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 0 12px 6px;
+    font-size: 0.8em;
+    color: var(--secondary-text-color);
+    font-weight: 500;
+  }
+  .lm-inbox-list-header .name { flex: 1; min-width: 140px; }
+  .lm-inbox-list-header .area { width: 140px; flex: none; }
+  .lm-inbox-list-header .area.sortable { cursor: pointer; user-select: none; }
+  .lm-inbox-list-header .area.sortable:hover { color: var(--primary-text-color); }
   .lm-inbox-group { margin-bottom: 20px; }
   .lm-inbox-group h3 { font-size: 1em; margin: 0 0 8px; color: var(--secondary-text-color); }
   .lm-inbox-item {
@@ -324,6 +339,13 @@ class LightingManagerPanel extends HTMLElement {
     this._showIgnored = false; // Table view hides ignored lights by default (2026-09-14 feedback)
     this._toastTimer = null;
     this._detailDirty = false; // true while the open drawer has an unsaved edit (2026-09-14 fix)
+    // Inbox area-column sort (2026-09-15 feedback: the Area column lines
+    // up but couldn't be sorted, unlike the Table view). Sorting is
+    // applied within each condition group rather than flattening the
+    // Inbox's grouped-by-condition structure, which is the point of the
+    // Inbox view in the first place (PRD §16).
+    this._inboxSortDirection = null; // null = insertion order; "asc" | "desc" once toggled
+
   }
 
   setConfig() {}
@@ -763,6 +785,9 @@ class LightingManagerPanel extends HTMLElement {
     ];
     for (const [key, label] of columns) {
       const th = document.createElement("th");
+      if (key === "schedule_count") {
+        th.title = "Read-only count. Create or edit schedules in the Scheduler Card.";
+      }
       const arrow =
         this._sortColumn === key
           ? `<span class="sort-arrow">${this._sortDirection === "asc" ? "▲" : "▼"}</span>`
@@ -857,8 +882,33 @@ class LightingManagerPanel extends HTMLElement {
       ...[...groups.keys()].filter((c) => !order.includes(c)),
     ];
 
+    // Clickable "Area" header, once above every group, matching the
+    // .name/.area fixed-width columns each row already uses (2026-09-15
+    // feedback: the Area column lined up but had no way to sort it).
+    // Sorting is applied within each condition group, not across the
+    // whole list - flattening the groups would defeat the point of the
+    // Inbox's condition-based grouping.
+    const listHeader = document.createElement("div");
+    listHeader.className = "lm-inbox-list-header";
+    const nameHead = document.createElement("span");
+    nameHead.className = "name";
+    nameHead.textContent = "Name";
+    listHeader.appendChild(nameHead);
+    const areaHead = document.createElement("span");
+    areaHead.className = "area sortable";
+    const arrow =
+      this._inboxSortDirection === "asc" ? " ▲" : this._inboxSortDirection === "desc" ? " ▼" : "";
+    areaHead.textContent = `Area${arrow}`;
+    areaHead.title = "Click to sort by area";
+    areaHead.addEventListener("click", () => {
+      this._inboxSortDirection = this._inboxSortDirection === "asc" ? "desc" : "asc";
+      this._renderInbox();
+    });
+    listHeader.appendChild(areaHead);
+    this._bodyEl.appendChild(listHeader);
+
     for (const condition of orderedConditions) {
-      const items = groups.get(condition);
+      const items = this._applyInboxSort(groups.get(condition));
       const section = document.createElement("div");
       section.className = "lm-inbox-group";
       const heading = document.createElement("h3");
@@ -870,6 +920,18 @@ class LightingManagerPanel extends HTMLElement {
       }
       this._bodyEl.appendChild(section);
     }
+  }
+
+  _applyInboxSort(items) {
+    if (!this._inboxSortDirection) return items;
+    const dir = this._inboxSortDirection === "desc" ? -1 : 1;
+    return items.slice().sort((a, b) => {
+      const lightA = this._lightsById.get(a.entity_id);
+      const lightB = this._lightsById.get(b.entity_id);
+      const areaA = lightA ? this._areaName(lightA.area_id) : "";
+      const areaB = lightB ? this._areaName(lightB.area_id) : "";
+      return areaA.localeCompare(areaB) * dir;
+    });
   }
 
   _renderInboxItem(item) {
@@ -1195,7 +1257,16 @@ class LightingManagerPanel extends HTMLElement {
       const schedInfo = document.createElement("div");
       schedInfo.className = "lm-field";
       schedInfo.style.marginTop = "16px";
-      schedInfo.innerHTML = `<span class="lm-badge">${light.schedule_count} schedule${light.schedule_count === 1 ? "" : "s"}</span>`;
+      // Hover tooltip requested 2026-09-15: this count is read-only (a
+      // reverse-index over Scheduler Component's own switch.schedule_*
+      // entities, PRD §18) - Lighting Manager deliberately doesn't
+      // duplicate Scheduler Component's own editor, so the natural
+      // question "how do I change this" needs an answer right here
+      // rather than only in the docs. A native title attribute is the
+      // cheap partial step; a real deep link into the Scheduler Card is
+      // still blocked on deep_link_for_schedule() returning None until
+      // that card exposes a stable per-schedule URL (see README).
+      schedInfo.innerHTML = `<span class="lm-badge" title="Read-only count. To create or edit a schedule, use the Scheduler Card (Niels Faber Scheduler) — Lighting Manager doesn't duplicate its editor.">${light.schedule_count} schedule${light.schedule_count === 1 ? "" : "s"}</span>`;
       this._detailEl.appendChild(schedInfo);
     }
   }
