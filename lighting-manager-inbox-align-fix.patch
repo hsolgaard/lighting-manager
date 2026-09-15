@@ -1,0 +1,156 @@
+diff --git a/custom_components/lighting_manager/frontend/lighting-manager-panel.js b/custom_components/lighting_manager/frontend/lighting-manager-panel.js
+index 23df7b0..f4e691f 100644
+--- a/custom_components/lighting_manager/frontend/lighting-manager-panel.js
++++ b/custom_components/lighting_manager/frontend/lighting-manager-panel.js
+@@ -245,6 +245,11 @@ const CSS_TEXT = `
+   .lm-inbox-list-header .area { width: 140px; flex: none; }
+   .lm-inbox-list-header .area.sortable { cursor: pointer; user-select: none; }
+   .lm-inbox-list-header .area.sortable:hover { color: var(--primary-text-color); }
++  /* Empty spacer matching .lm-inbox-item .actions below exactly, so Area
++   * lines up with the real column of Area values in every row rather
++   * than sitting flush at the header's own right edge (2026-09-15 fix -
++   * see _renderInboxItem). */
++  .lm-inbox-list-header .actions { width: 190px; flex: none; }
+   .lm-inbox-group { margin-bottom: 20px; }
+   .lm-inbox-group h3 { font-size: 1em; margin: 0 0 8px; color: var(--secondary-text-color); }
+   .lm-inbox-item {
+@@ -264,7 +269,17 @@ const CSS_TEXT = `
+    * list rather than a variable-length aside next to the name - the
+    * "Area should be a column" feedback (2026-09-14). */
+   .lm-inbox-item .area { width: 140px; flex: none; color: var(--secondary-text-color); font-size: 0.85em; }
+-  .lm-inbox-item .meta { color: var(--secondary-text-color); font-size: 0.85em; }
++  /* meta is now a second line nested inside .name (2026-09-15 fix) rather
++   * than its own trailing flex item - see _renderInboxItem's comment for
++   * why: a variable-width trailing item was what broke Area's alignment
++   * with the header in the first place. */
++  .lm-inbox-item .meta { color: var(--secondary-text-color); font-size: 0.85em; font-weight: 400; margin-top: 2px; }
++  /* Fixed width, same value as .lm-inbox-list-header .actions, so a
++   * row's trailing content past Area is always the same total width
++   * regardless of how many buttons this condition has (0, 1, or 2) -
++   * without this, Area's on-screen position shifted per condition group
++   * even though its own width was already fixed (2026-09-15 bugfix). */
++  .lm-inbox-item .actions { width: 190px; flex: none; display: flex; justify-content: flex-end; gap: 6px; flex-wrap: wrap; }
+   .lm-detail h2 { font-size: 1.1em; margin: 0 0 2px; word-break: break-word; }
+   .lm-detail .entity-id { font-family: monospace; font-size: 0.8em; color: var(--secondary-text-color); margin-bottom: 16px; word-break: break-all; }
+   .lm-field { margin-bottom: 16px; }
+@@ -1107,6 +1122,15 @@ class LightingManagerPanel extends HTMLElement {
+       this._renderInbox();
+     });
+     listHeader.appendChild(areaHead);
++    // Empty spacer matching the row's .actions column width exactly
++    // (2026-09-15 bugfix - see _renderInboxItem's comment above the
++    // Area/actions split) - without this, Area here sits at the very
++    // right edge of the header (nothing follows it), while every real
++    // row's Area sits to the *left* of its buttons. Same width reserved
++    // whether or not this row's condition actually has any buttons.
++    const actionsHead = document.createElement("span");
++    actionsHead.className = "actions";
++    listHeader.appendChild(actionsHead);
+     this._bodyEl.appendChild(listHeader);
+ 
+     for (const condition of orderedConditions) {
+@@ -1148,34 +1172,53 @@ class LightingManagerPanel extends HTMLElement {
+       this._selectEntity(item.entity_id);
+     });
+ 
++    // Real bug found 2026-09-15: the Area column (fixed-width span below)
++    // only actually lined up *within* a condition group, because each
++    // row is its own independent flex box, not a shared table - a row's
++    // trailing content (the free-text "meta" span, then a variable
++    // number of buttons) pushed Area to a different horizontal offset
++    // depending on how much followed it. The new header row above every
++    // group (added alongside Inbox area-sort) exposed this: the header
++    // has nothing after Area, so it sat further right than the Area
++    // values in every actual row. Fixed by removing the variable-width
++    // trailing content entirely: "meta" now renders as a second line
++    // under the name (inside the fixed-width .name column) instead of
++    // its own trailing flex item, and the buttons live inside a
++    // fixed-width .actions column (right-aligned within it, empty but
++    // still present when a condition has no buttons) so every row's
++    // trailing width past Area is identical - and the header's own empty
++    // .actions spacer (see _renderInbox) now lines up with it exactly.
+     const name = document.createElement("span");
+     name.className = "name";
+-    name.textContent = (light && light.name) || item.entity_id;
++    const nameMain = document.createElement("div");
++    nameMain.textContent = (light && light.name) || item.entity_id;
++    name.appendChild(nameMain);
++
++    let metaText = "";
++    if (item.condition === "area_mismatch" && item.detail) {
++      metaText = `device: ${this._areaName(item.detail.device_area)} · entity: ${this._areaName(item.detail.entity_area)}`;
++    } else if (item.condition === "missing" && item.detail && item.detail.since) {
++      metaText = `since ${new Date(item.detail.since).toLocaleString()}`;
++    } else if (!light) {
++      metaText = item.entity_id;
++    }
++    if (metaText) {
++      const metaEl = document.createElement("div");
++      metaEl.className = "meta";
++      metaEl.textContent = metaText;
++      name.appendChild(metaEl);
++    }
+     row.appendChild(name);
+ 
+-    // Real feedback (2026-09-14): area was previously folded into the
+-    // free-text "meta" span, so it never lined up between rows. Broken
+-    // out into its own fixed-width span (.area, styled as a column
+-    // above) so it actually reads as a column down the list, same idea
+-    // as the Table view's Area column.
+     const area = document.createElement("span");
+     area.className = "area";
+     area.textContent = light ? this._areaName(light.area_id) : "—";
+     row.appendChild(area);
+ 
+-    const meta = document.createElement("span");
+-    meta.className = "meta";
+-    if (item.condition === "area_mismatch" && item.detail) {
+-      meta.textContent = `device: ${this._areaName(item.detail.device_area)} · entity: ${this._areaName(item.detail.entity_area)}`;
+-    } else if (item.condition === "missing" && item.detail && item.detail.since) {
+-      meta.textContent = `since ${new Date(item.detail.since).toLocaleString()}`;
+-    } else if (!light) {
+-      meta.textContent = item.entity_id;
+-    }
+-    if (meta.textContent) row.appendChild(meta);
+-
++    const actions = document.createElement("span");
++    actions.className = "actions";
+     if (item.condition === "new_light") {
+-      row.appendChild(
++      actions.appendChild(
+         // "Adopt…" read as truncated text rather than a label (2026-09-14
+         // feedback); this opens the detail drawer to review/edit the
+         // light before adopting it, so "Review" says what actually
+@@ -1185,14 +1228,14 @@ class LightingManagerPanel extends HTMLElement {
+           this._selectEntity(item.entity_id);
+         }, { primary: true })
+       );
+-      row.appendChild(
++      actions.appendChild(
+         this._makeButton("Ignore", async (e) => {
+           e.stopPropagation();
+           await this._callAction("ignore_light", { entity_id: item.entity_id });
+         })
+       );
+     } else if (item.condition === "area_mismatch" && item.detail) {
+-      row.appendChild(
++      actions.appendChild(
+         this._makeButton("Use device area", async (e) => {
+           e.stopPropagation();
+           await this._callAction("move_light", {
+@@ -1202,13 +1245,14 @@ class LightingManagerPanel extends HTMLElement {
+         })
+       );
+     } else if (item.condition === "unassigned") {
+-      row.appendChild(
++      actions.appendChild(
+         this._makeButton("Set area", (e) => {
+           e.stopPropagation();
+           this._selectEntity(item.entity_id);
+         })
+       );
+     }
++    row.appendChild(actions);
+ 
+     return row;
+   }
