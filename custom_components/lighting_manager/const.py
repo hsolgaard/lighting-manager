@@ -35,6 +35,7 @@ LIGHT_TYPES: list[str] = [
     "floor_lamp",
     "cabinet_light",
     "outdoor",
+    "flood_light",
     "lamp_plug",
     "decorative",
     "other",

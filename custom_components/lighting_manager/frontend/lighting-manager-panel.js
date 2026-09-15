@@ -48,6 +48,7 @@ const LIGHT_TYPES = [
   "floor_lamp",
   "cabinet_light",
   "outdoor",
+  "flood_light",
   "lamp_plug",
   "decorative",
   "other",
@@ -62,6 +63,7 @@ const LIGHT_TYPE_LABELS = {
   floor_lamp: "Floor lamp",
   cabinet_light: "Cabinet light",
   outdoor: "Outdoor",
+  flood_light: "Flood light",
   lamp_plug: "Lamp plug",
   decorative: "Decorative",
   other: "Other",
@@ -114,7 +116,19 @@ const ACTION_SUCCESS_MESSAGES = {
 };
 
 const CSS_TEXT = `
-  /* Real bug found 2026-09-14 during live testing: this panel has no
+  /* Real bug found 2026-09-14: setting an element's .hidden property only
+   * works via the browser's User-Agent stylesheet rule "[hidden] {
+   * display: none}" - and author CSS (ours) always wins over UA CSS
+   * regardless of selector specificity. Several elements here (e.g.
+   * .lm-checkbox-row, which sets display:flex) have their own author
+   * "display" rule, which silently defeated .hidden - this is exactly
+   * why the "Show ignored" toggle kept showing on the Inbox tab even
+   * though _updateToolbarVisibility() was setting .hidden = true on it
+   * the whole time. This single !important rule makes .hidden reliably
+   * win everywhere in this panel, instead of patching each individual
+   * class that happens to set its own display. */
+  [hidden] { display: none !important; }
+  /* This panel has no
    * Shadow DOM (deliberately - see the file header), so ":host" here
    * was always dead code (it only means anything inside a shadow
    * root). Nothing was actually setting height on the custom element
@@ -231,6 +245,10 @@ const CSS_TEXT = `
   }
   .lm-inbox-item:hover { background: var(--secondary-background-color); }
   .lm-inbox-item .name { flex: 1; min-width: 140px; font-weight: 500; }
+  /* Fixed width (not flex:1) so this reads as an aligned column down the
+   * list rather than a variable-length aside next to the name - the
+   * "Area should be a column" feedback (2026-09-14). */
+  .lm-inbox-item .area { width: 140px; flex: none; color: var(--secondary-text-color); font-size: 0.85em; }
   .lm-inbox-item .meta { color: var(--secondary-text-color); font-size: 0.85em; }
   .lm-detail h2 { font-size: 1.1em; margin: 0 0 2px; word-break: break-word; }
   .lm-detail .entity-id { font-family: monospace; font-size: 0.8em; color: var(--secondary-text-color); margin-bottom: 16px; word-break: break-all; }
@@ -305,6 +323,7 @@ class LightingManagerPanel extends HTMLElement {
     this._pendingAreaId = undefined; // undefined = "not touched yet" for the detail form
     this._showIgnored = false; // Table view hides ignored lights by default (2026-09-14 feedback)
     this._toastTimer = null;
+    this._detailDirty = false; // true while the open drawer has an unsaved edit (2026-09-14 fix)
   }
 
   setConfig() {}
@@ -364,10 +383,21 @@ class LightingManagerPanel extends HTMLElement {
       if (this._selectedEntityId) {
         const light = this._lightsById.get(this._selectedEntityId);
         if (light) {
-          this._renderDetail(light);
+          // Real bug found 2026-09-14: this ran on every 15s poll
+          // unconditionally, rebuilding the Name/Type/Area controls from
+          // fresh server data - which silently threw away anything typed
+          // or selected but not yet saved (Hans hit this with the Type
+          // dropdown reverting to "-- none --" after ~10-15s). Skip the
+          // rebuild while the user has an unsaved edit in progress;
+          // _callAction clears the dirty flag right before its own
+          // refresh, so a successful save still picks up fresh data.
+          if (!this._detailDirty) {
+            this._renderDetail(light);
+          }
         } else {
           // Light disappeared (e.g. entity removed) - close the drawer.
           this._selectedEntityId = null;
+          this._detailDirty = false;
           this._renderDetail(null);
         }
       }
@@ -380,6 +410,12 @@ class LightingManagerPanel extends HTMLElement {
     try {
       await this._hass.callWS({ type: `lighting_manager/${type}`, ...extra });
       this._clearError();
+      // Whatever was "dirty" has just been saved (or the action wasn't a
+      // field edit at all, in which case this is a harmless no-op) - the
+      // refresh below should rebuild the drawer from the now-current
+      // server data rather than being skipped as if there were still an
+      // unsaved edit sitting in it.
+      this._detailDirty = false;
       await this._refreshAll();
       this._showToast(ACTION_SUCCESS_MESSAGES[type] || "Done");
       return true;
@@ -853,30 +889,26 @@ class LightingManagerPanel extends HTMLElement {
     name.textContent = (light && light.name) || item.entity_id;
     row.appendChild(name);
 
+    // Real feedback (2026-09-14): area was previously folded into the
+    // free-text "meta" span, so it never lined up between rows. Broken
+    // out into its own fixed-width span (.area, styled as a column
+    // above) so it actually reads as a column down the list, same idea
+    // as the Table view's Area column.
+    const area = document.createElement("span");
+    area.className = "area";
+    area.textContent = light ? this._areaName(light.area_id) : "—";
+    row.appendChild(area);
+
     const meta = document.createElement("span");
     meta.className = "meta";
-    // Real feedback (2026-09-14): the Inbox showed no area at all for
-    // most conditions (just the raw entity_id, which duplicates the row
-    // below it in most fallback cases) - area is the single most useful
-    // thing for identifying *which* light this is, so it's now always
-    // shown first, with condition-specific detail appended after it.
-    const areaText = light ? `area: ${this._areaName(light.area_id)}` : null;
-    let extra = null;
     if (item.condition === "area_mismatch" && item.detail) {
-      extra = `device: ${this._areaName(item.detail.device_area)} · entity: ${this._areaName(item.detail.entity_area)}`;
+      meta.textContent = `device: ${this._areaName(item.detail.device_area)} · entity: ${this._areaName(item.detail.entity_area)}`;
     } else if (item.condition === "missing" && item.detail && item.detail.since) {
-      extra = `since ${new Date(item.detail.since).toLocaleString()}`;
-    }
-    if (areaText && extra) {
-      meta.textContent = `${areaText} · ${extra}`;
-    } else if (extra) {
-      meta.textContent = extra;
-    } else if (areaText) {
-      meta.textContent = areaText;
-    } else {
+      meta.textContent = `since ${new Date(item.detail.since).toLocaleString()}`;
+    } else if (!light) {
       meta.textContent = item.entity_id;
     }
-    row.appendChild(meta);
+    if (meta.textContent) row.appendChild(meta);
 
     if (item.condition === "new_light") {
       row.appendChild(
@@ -922,6 +954,7 @@ class LightingManagerPanel extends HTMLElement {
   _selectEntity(entityId) {
     this._selectedEntityId = entityId;
     this._pendingAreaId = undefined;
+    this._detailDirty = false;
     const light = this._lightsById.get(entityId);
     this._renderDetail(light || null);
     // Re-render the current list so the fallback table's "selected" row
@@ -935,6 +968,7 @@ class LightingManagerPanel extends HTMLElement {
   _closeDetail() {
     this._selectedEntityId = null;
     this._pendingAreaId = undefined;
+    this._detailDirty = false;
     this._renderDetail(null);
     if (this._view === "table" && !customElements.get("ha-data-table")) {
       this._renderTable();
@@ -1176,6 +1210,12 @@ class LightingManagerPanel extends HTMLElement {
     const inputRow = document.createElement("div");
     inputRow.className = "lm-field-row";
     const input = buildInput();
+    // Mark the drawer dirty on any edit so the 15s poll doesn't clobber
+    // it mid-edit (see the _refreshAll fix above) - covers both a text
+    // input (Name) and a <select> (Type) via the two events that fire
+    // for user-driven changes on each.
+    input.addEventListener("input", () => { this._detailDirty = true; });
+    input.addEventListener("change", () => { this._detailDirty = true; });
     inputRow.appendChild(input);
     inputRow.appendChild(this._makeButton(buttonText, () => onSave(input)));
     row.appendChild(inputRow);
@@ -1200,6 +1240,7 @@ class LightingManagerPanel extends HTMLElement {
       picker.value = light.area_id || "";
       picker.addEventListener("value-changed", (ev) => {
         this._pendingAreaId = ev.detail.value || null;
+        this._detailDirty = true;
       });
       this._areaPickerEl = picker;
       inputRow.appendChild(picker);
@@ -1219,6 +1260,7 @@ class LightingManagerPanel extends HTMLElement {
       select.value = light.area_id || "";
       select.addEventListener("change", () => {
         this._pendingAreaId = select.value || null;
+        this._detailDirty = true;
       });
       inputRow.appendChild(select);
       getValue = () => select.value || null;
