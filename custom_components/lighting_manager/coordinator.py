@@ -348,6 +348,43 @@ class LightingManagerCoordinator:
                 result.append(entity_id)
         return result
 
+    def async_list_area_lights(self, area_id: str) -> list[LightView]:
+        """Adopted, non-ignored lights in this Area, in the user's chosen order.
+
+        Backs light-scheduler-list-card's area-aware mode (PRD Revision -
+        Lighting-Aware Dashboard Automation §4.2). Only adopted lights are
+        included - an ignored/unadopted light in the Area is deliberately
+        left out ("otherwise what's the point of leaving some lights
+        ignored", Hans, round 2 - same reasoning as promoted-switch
+        adoption in async_list_promoted_switch_entity_ids).
+
+        Order follows any persisted manual override
+        (async_set_area_light_order); anything not in that override - a
+        newly-adopted light, or before any override has ever been saved -
+        is appended alphabetically by name, so a stale or partial override
+        never hides a light, it just falls back to alphabetical for that
+        one.
+        """
+        views = [
+            v
+            for v in self.async_list_lights()
+            if v.adopted and not v.ignored and v.area_id == area_id
+        ]
+        order = self.store.get_area_light_order(area_id)
+        order_index = {entity_id: i for i, entity_id in enumerate(order)}
+        ordered = sorted(
+            (v for v in views if v.entity_id in order_index),
+            key=lambda v: order_index[v.entity_id],
+        )
+        unordered = sorted(
+            (v for v in views if v.entity_id not in order_index),
+            key=lambda v: v.name.lower(),
+        )
+        return ordered + unordered
+
+    async def async_set_area_light_order(self, area_id: str, entity_ids: list[str]) -> None:
+        await self.store.async_set_area_light_order(area_id, entity_ids)
+
     async def async_promote_switch(self, entity_id: str) -> None:
         """PRD §11.1: explicit, per-entity opt-in - never inferred automatically."""
         key = registry.stable_key_for_entity(self.hass, entity_id)

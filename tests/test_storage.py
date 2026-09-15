@@ -75,3 +75,30 @@ async def test_get_countdown_returns_none_when_absent(hass: HomeAssistant) -> No
     await store.async_load()
 
     assert store.get_countdown("light.never_started") is None
+
+
+async def test_area_light_order_defaults_to_empty(hass: HomeAssistant) -> None:
+    store = LightingManagerStore(hass)
+    await store.async_load()
+
+    assert store.get_area_light_order("unknown_area") == []
+
+
+async def test_area_light_order_round_trips(hass: HomeAssistant) -> None:
+    store = LightingManagerStore(hass)
+    await store.async_load()
+
+    await store.async_set_area_light_order("big_lounge", ["light.a", "light.b"])
+
+    assert store.get_area_light_order("big_lounge") == ["light.a", "light.b"]
+
+
+async def test_area_light_order_persists_across_store_reload(hass: HomeAssistant) -> None:
+    store = LightingManagerStore(hass)
+    await store.async_load()
+    await store.async_set_area_light_order("kitchen", ["light.hob_spots"])
+
+    reloaded_store = LightingManagerStore(hass)
+    await reloaded_store.async_load()
+
+    assert reloaded_store.get_area_light_order("kitchen") == ["light.hob_spots"]

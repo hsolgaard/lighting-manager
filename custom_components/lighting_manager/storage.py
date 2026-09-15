@@ -76,6 +76,12 @@ class LightingManagerData:
 
     lights: dict[str, dict[str, Any]] = field(default_factory=dict)
     countdowns: dict[str, dict[str, Any]] = field(default_factory=dict)
+    # Manual sort-order override per Area, for light-scheduler-list-card's
+    # area-aware mode (PRD Revision - Lighting-Aware Dashboard Automation
+    # §4.2). An ordered list of entity_ids; anything adopted-in-area but
+    # not present here falls back to alphabetical - see
+    # coordinator.async_list_area_lights.
+    area_light_order: dict[str, list[str]] = field(default_factory=dict)
 
 
 class LightingManagerStore:
@@ -98,6 +104,7 @@ class LightingManagerStore:
         self.data = LightingManagerData(
             lights=raw.get("lights", {}),
             countdowns=raw.get("countdowns", {}),
+            area_light_order=raw.get("area_light_order", {}),
         )
 
     async def async_save(self) -> None:
@@ -105,6 +112,7 @@ class LightingManagerStore:
             {
                 "lights": self.data.lights,
                 "countdowns": self.data.countdowns,
+                "area_light_order": self.data.area_light_order,
             }
         )
 
@@ -146,3 +154,12 @@ class LightingManagerStore:
             entity_id: CountdownRecord(**raw)
             for entity_id, raw in self.data.countdowns.items()
         }
+
+    # -- per-Area manual light order (light-scheduler-list-card) ----------
+
+    def get_area_light_order(self, area_id: str) -> list[str]:
+        return list(self.data.area_light_order.get(area_id, []))
+
+    async def async_set_area_light_order(self, area_id: str, entity_ids: list[str]) -> None:
+        self.data.area_light_order[area_id] = list(entity_ids)
+        await self.async_save()

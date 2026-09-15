@@ -27,6 +27,8 @@ from .coordinator import LightingManagerCoordinator
 
 def async_register_websocket_commands(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_list_lights)
+    websocket_api.async_register_command(hass, ws_list_area_lights)
+    websocket_api.async_register_command(hass, ws_set_area_light_order)
     websocket_api.async_register_command(hass, ws_list_inbox)
     websocket_api.async_register_command(hass, ws_list_promotable_switches)
     websocket_api.async_register_command(hass, ws_adopt_light)
@@ -53,6 +55,38 @@ def _coordinator(hass: HomeAssistant) -> LightingManagerCoordinator:
 def ws_list_lights(hass: HomeAssistant, connection, msg) -> None:
     lights = _coordinator(hass).async_list_lights()
     connection.send_result(msg["id"], {"lights": [vars(light) for light in lights]})
+
+
+@callback
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): f"{DOMAIN}/list_area_lights",
+        vol.Required("area_id"): str,
+    }
+)
+def ws_list_area_lights(hass: HomeAssistant, connection, msg) -> None:
+    """Backs light-scheduler-list-card's area-aware mode (PRD Revision §4.2).
+
+    Not admin-gated, matching ws_list_lights - a non-admin dashboard
+    viewer still needs to see the card, they just can't reorder it (see
+    ws_set_area_light_order below).
+    """
+    lights = _coordinator(hass).async_list_area_lights(msg["area_id"])
+    connection.send_result(msg["id"], {"lights": [vars(light) for light in lights]})
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): f"{DOMAIN}/set_area_light_order",
+        vol.Required("area_id"): str,
+        vol.Required("entity_ids"): [str],
+    }
+)
+@websocket_api.async_response
+async def ws_set_area_light_order(hass: HomeAssistant, connection, msg) -> None:
+    await _coordinator(hass).async_set_area_light_order(msg["area_id"], msg["entity_ids"])
+    connection.send_result(msg["id"])
 
 
 @callback

@@ -162,6 +162,81 @@ async def test_mutating_command_rejected_for_non_admin(
     assert response["error"]["code"] == "unauthorized"
 
 
+async def test_list_area_lights_returns_only_adopted_in_area(
+    api_hass: HomeAssistant, hass_ws_client
+) -> None:
+    from homeassistant.helpers import area_registry as ar
+
+    coordinator: LightingManagerCoordinator = api_hass.data[DOMAIN]["coordinator"]
+    lounge = ar.async_get(api_hass).async_create("Big Lounge")
+
+    entry = er.async_get(api_hass).async_get_or_create(
+        "light", "test_platform", "lounge-ceiling-ws"
+    )
+    api_hass.states.async_set(entry.entity_id, "off")
+    await coordinator.async_adopt_light(entry.entity_id, area_id=lounge.id)
+
+    client = await hass_ws_client(api_hass)
+    await client.send_json_auto_id(
+        {"type": f"{DOMAIN}/list_area_lights", "area_id": lounge.id}
+    )
+    response = await client.receive_json()
+
+    assert response["success"] is True
+    entity_ids = {light["entity_id"] for light in response["result"]["lights"]}
+    assert entity_ids == {entry.entity_id}
+
+
+async def test_set_area_light_order_via_websocket_then_reflected_in_list(
+    api_hass: HomeAssistant, hass_ws_client
+) -> None:
+    from homeassistant.helpers import area_registry as ar
+
+    coordinator: LightingManagerCoordinator = api_hass.data[DOMAIN]["coordinator"]
+    lounge = ar.async_get(api_hass).async_create("Big Lounge")
+
+    first = er.async_get(api_hass).async_get_or_create("light", "test_platform", "first")
+    second = er.async_get(api_hass).async_get_or_create("light", "test_platform", "second")
+    for entry in (first, second):
+        api_hass.states.async_set(entry.entity_id, "off")
+        await coordinator.async_adopt_light(entry.entity_id, area_id=lounge.id)
+
+    client = await hass_ws_client(api_hass)
+    await client.send_json_auto_id(
+        {
+            "type": f"{DOMAIN}/set_area_light_order",
+            "area_id": lounge.id,
+            "entity_ids": [second.entity_id, first.entity_id],
+        }
+    )
+    assert (await client.receive_json())["success"] is True
+
+    await client.send_json_auto_id(
+        {"type": f"{DOMAIN}/list_area_lights", "area_id": lounge.id}
+    )
+    listing = await client.receive_json()
+    ordered_ids = [light["entity_id"] for light in listing["result"]["lights"]]
+    assert ordered_ids == [second.entity_id, first.entity_id]
+
+
+async def test_set_area_light_order_rejected_for_non_admin(
+    api_hass: HomeAssistant, hass_ws_client, hass_read_only_access_token
+) -> None:
+    client = await hass_ws_client(api_hass, hass_read_only_access_token)
+
+    await client.send_json_auto_id(
+        {
+            "type": f"{DOMAIN}/set_area_light_order",
+            "area_id": "big_lounge",
+            "entity_ids": [],
+        }
+    )
+    response = await client.receive_json()
+
+    assert response["success"] is False
+    assert response["error"]["code"] == "unauthorized"
+
+
 async def test_read_only_command_allowed_for_non_admin(
     api_hass: HomeAssistant, hass_ws_client, hass_read_only_access_token
 ) -> None:

@@ -333,6 +333,55 @@ async def test_list_promoted_switch_entity_ids_excludes_unrelated_and_other_area
     assert result == [lamp_switch]
 
 
+async def test_list_area_lights_only_includes_adopted_non_ignored(
+    hass: HomeAssistant, coordinator: LightingManagerCoordinator
+) -> None:
+    from homeassistant.helpers import area_registry as ar
+
+    lounge = ar.async_get(hass).async_create("Big Lounge")
+
+    adopted = _register_light(hass, "light.lounge_ceiling", "lounge-ceiling")
+    await coordinator.async_adopt_light(adopted, area_id=lounge.id)
+
+    ignored = _register_light(hass, "light.lounge_spare", "lounge-spare")
+    await coordinator.async_adopt_light(ignored, area_id=lounge.id)
+    await coordinator.async_ignore_light(ignored)
+
+    unadopted = _register_light(hass, "light.lounge_new", "lounge-new")
+    await registry.async_set_entity_area(hass, unadopted, lounge.id)
+
+    result = [v.entity_id for v in coordinator.async_list_area_lights(lounge.id)]
+
+    assert result == [adopted]
+
+
+async def test_list_area_lights_respects_manual_order_with_fallback(
+    hass: HomeAssistant, coordinator: LightingManagerCoordinator
+) -> None:
+    """Regression test for the "stale/partial override never hides a light" contract.
+
+    A light present when the override was saved keeps its explicit
+    position; a light adopted afterwards (never part of the override)
+    falls back to alphabetical, appended after the explicitly-ordered
+    entries rather than being dropped.
+    """
+    from homeassistant.helpers import area_registry as ar
+
+    lounge = ar.async_get(hass).async_create("Big Lounge")
+
+    a = _register_light(hass, "light.aaa", "aaa")
+    b = _register_light(hass, "light.bbb", "bbb")
+    c = _register_light(hass, "light.ccc", "ccc")
+    for entity_id in (a, b, c):
+        await coordinator.async_adopt_light(entity_id, area_id=lounge.id)
+
+    await coordinator.async_set_area_light_order(lounge.id, [c, a])
+
+    result = [v.entity_id for v in coordinator.async_list_area_lights(lounge.id)]
+
+    assert result == [c, a, b]
+
+
 async def test_rename_on_registry_less_entity_raises(
     hass: HomeAssistant, coordinator: LightingManagerCoordinator
 ) -> None:
