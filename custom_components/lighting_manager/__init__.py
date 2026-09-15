@@ -19,6 +19,7 @@ from homeassistant.components import frontend, panel_custom
 from .api import async_register_websocket_commands
 from .const import DOMAIN, PLATFORMS
 from .coordinator import LightingManagerCoordinator
+from .services import async_register_services, async_unregister_services
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -41,6 +42,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         async_register_websocket_commands(hass)
         hass.data[DOMAIN]["_ws_registered"] = True
 
+    # Same once-per-HA-run guard as websocket commands above, and for the
+    # same reason: single_config_entry guarantees one entry, but
+    # hass.services.async_register would still raise if this ever ran
+    # twice (e.g. a future change that adds a reload path).
+    if not hass.data[DOMAIN].get("_services_registered"):
+        async_register_services(hass)
+        hass.data[DOMAIN]["_services_registered"] = True
+
     await _async_register_panel(hass)
 
     if PLATFORMS:
@@ -57,6 +66,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
 
     frontend.async_remove_panel(hass, PANEL_URL)
+    async_unregister_services(hass)
     hass.data.pop(DOMAIN, None)
     return True
 

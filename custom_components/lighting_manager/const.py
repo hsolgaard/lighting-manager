@@ -48,6 +48,14 @@ COUNTDOWN_PRESETS_MIN = [15, 30, 60, 120]
 # --- Scheduler provider (PRD §18) ---------------------------------------
 SCHEDULER_COMPONENT_ENTITY_PREFIX = "switch.schedule_"
 
+# --- Services (PRD Revision - Lighting-Aware Dashboard Automation §4.1) -
+# turn_off_area forwards a native, zero-maintenance Area-targeted
+# light.turn_off, then separately turns off exactly the adopted, promoted
+# switch.* entities in that Area - never every switch HA happens to place
+# there. See services.py for why this can't just be "also area-target
+# switch.turn_off".
+SERVICE_TURN_OFF_AREA = "turn_off_area"
+
 # --- Inbox conditions (PRD §16, §40 decision table) ---------------------
 INBOX_NEW = "new_light"
 INBOX_UNASSIGNED = "unassigned"

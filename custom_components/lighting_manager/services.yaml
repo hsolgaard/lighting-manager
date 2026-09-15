@@ -1,0 +1,9 @@
+turn_off_area:
+  name: Turn off area lighting
+  description: >-
+    Turns off every light.* entity in the given Area(s) via native Home
+    Assistant Area targeting, plus any switch.* entities Lighting Manager
+    has adopted as promoted lamps in those Areas - never other switches
+    sharing the same Area.
+  target:
+    area:

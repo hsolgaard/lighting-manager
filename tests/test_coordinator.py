@@ -11,6 +11,7 @@ import pytest
 from homeassistant.core import CoreState, EVENT_HOMEASSISTANT_STARTED, HomeAssistant
 from homeassistant.helpers import entity_registry as er
 
+from custom_components.lighting_manager import registry
 from custom_components.lighting_manager.const import (
     INBOX_AREA_MISMATCH,
     INBOX_NEW,
@@ -293,6 +294,43 @@ async def test_scheduler_detected_after_late_ha_start(hass: HomeAssistant) -> No
     assert len(coord.scheduler.async_schedules_for_entity("light.kitchen")) == 1
 
     await coord.async_unload()
+
+
+async def test_list_promoted_switch_entity_ids_excludes_unrelated_and_other_areas(
+    hass: HomeAssistant, coordinator: LightingManagerCoordinator
+) -> None:
+    """Regression test for the promoted-switch safety gap (PRD Revision §4.1).
+
+    A naive area-targeted switch.turn_off would also hit unrelated
+    switches sharing the Area (e.g. Hans's real switch.hob_power,
+    switch.hob_child_lock, switch.dk_vpn). This must return only
+    switches that are both promoted AND adopted in the requested
+    Area(s) - never a promoted-but-not-adopted switch, an ignored one,
+    or one in a different Area.
+    """
+    from homeassistant.helpers import area_registry as ar
+
+    kitchen = ar.async_get(hass).async_create("Kitchen")
+    lounge = ar.async_get(hass).async_create("Lounge")
+
+    lamp_switch = _register_light(hass, "switch.counter_lamp", "counter-lamp")
+    await coordinator.async_promote_switch(lamp_switch)
+    await coordinator.async_adopt_light(lamp_switch, area_id=kitchen.id)
+
+    not_yet_adopted = _register_light(hass, "switch.new_lamp", "new-lamp")
+    await coordinator.async_promote_switch(not_yet_adopted)
+    await registry.async_set_entity_area(hass, not_yet_adopted, kitchen.id)
+
+    unrelated_switch = _register_light(hass, "switch.hob_power", "hob-power")
+    await registry.async_set_entity_area(hass, unrelated_switch, kitchen.id)
+
+    other_area_lamp = _register_light(hass, "switch.lounge_lamp", "lounge-lamp")
+    await coordinator.async_promote_switch(other_area_lamp)
+    await coordinator.async_adopt_light(other_area_lamp, area_id=lounge.id)
+
+    result = coordinator.async_list_promoted_switch_entity_ids([kitchen.id])
+
+    assert result == [lamp_switch]
 
 
 async def test_rename_on_registry_less_entity_raises(

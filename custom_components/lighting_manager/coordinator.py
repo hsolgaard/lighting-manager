@@ -27,6 +27,7 @@ from .const import (
     INBOX_NEW,
     INBOX_UNASSIGNED,
     MISSING_AFTER_SECONDS,
+    SWITCH_DOMAIN,
 )
 from .countdown import CountdownManager
 from .providers.scheduler.base import SchedulerProvider
@@ -317,6 +318,35 @@ class LightingManagerCoordinator:
         record = self.store.get_light(key)
         record.dashboard_included = included
         await self.store.async_set_light(key, record)
+
+    def async_list_promoted_switch_entity_ids(self, area_ids: list[str]) -> list[str]:
+        """Adopted, promoted lamp switches whose effective Area is in area_ids.
+
+        Backs the turn_off_area service (PRD Revision §4.1): native
+        Area-targeted light.turn_off never reaches a promoted switch.*
+        entity, since service domain and area targeting compose rather
+        than merge - and naively also area-targeting switch.turn_off is
+        unsafe, since a room can hold unrelated switches Lighting Manager
+        has no business touching (Hans's real dashboard has
+        switch.hob_power, switch.hob_child_lock and switch.dk_vpn sharing
+        an Area with an adopted lamp switch). Only entities that are both
+        adopted (not merely promoted - PRD §11.1 requires the explicit
+        adoption step, same as any other light) and not ignored are
+        returned.
+        """
+        area_id_set = set(area_ids)
+        result: list[str] = []
+        for entity_id in self._async_all_managed_entity_ids():
+            if not entity_id.startswith(f"{SWITCH_DOMAIN}."):
+                continue
+            key = registry.stable_key_for_entity(self.hass, entity_id)
+            record = self.store.get_light(key)
+            if not record.promoted_switch or not record.adopted or record.ignored:
+                continue
+            area_id = registry.async_get_effective_area(self.hass, entity_id)
+            if area_id in area_id_set:
+                result.append(entity_id)
+        return result
 
     async def async_promote_switch(self, entity_id: str) -> None:
         """PRD §11.1: explicit, per-entity opt-in - never inferred automatically."""
