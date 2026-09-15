@@ -1,0 +1,314 @@
+diff --git a/custom_components/lighting_manager/frontend/README.md b/custom_components/lighting_manager/frontend/README.md
+index abb2e11..47d1be4 100644
+--- a/custom_components/lighting_manager/frontend/README.md
++++ b/custom_components/lighting_manager/frontend/README.md
+@@ -1,8 +1,9 @@
+ # Frontend panel - current status
+ 
+-`lighting-manager-panel.js` is the real Table + Inbox UI (PRD §8, §16), built
+-2026-09-14 to replace the earlier placeholder that only proved the plumbing
+-(sidebar registration, static path serving, websocket round-trip).
++`lighting-manager-panel.js` is the real Table + Inbox + Dashboard UI (PRD
++§7/8/16/22), built 2026-09-14/15 to replace the earlier placeholder that
++only proved the plumbing (sidebar registration, static path serving,
++websocket round-trip).
+ 
+ ## What's implemented
+ 
+@@ -13,11 +14,22 @@
+ - **Inbox view**: grouped by condition (new, unassigned, area mismatch,
+   missing, plus the two conditions defined in `const.py` but not yet
+   produced by the backend), each with condition-specific quick actions.
+-- **Detail drawer**: opens on clicking any row/item in either view. Handles
+-  rename, move (area), set light type, adopt / ignore / un-ignore, dashboard
+-  toggle, and countdown start (presets + custom minutes, with a "turn on
+-  first" toggle) / cancel. Shared between Table and Inbox rather than
+-  duplicated per view.
++- **Dashboard view** (added 2026-09-15, PRD §22): the daily-use control
++  surface, deliberately separate from Table/Inbox's admin purpose. Shows
++  only lights with `dashboard_included=true`, grouped by area, each as a
++  card with a power toggle (calls `light.turn_on`/`turn_off` or
++  `switch.turn_on`/`turn_off` directly via `hass.callService` - not a
++  Lighting Manager websocket command, this is a live HA entity action) plus
++  inline countdown presets/custom-minutes/cancel. This is the "click a
++  light on the TV lounge dashboard, turn it off in 20 minutes" workflow
++  Hans described as his actual replacement for Simple Timer - not a config
++  screen, so it has no detail-drawer integration; a "Manage" button on each
++  card jumps to that light's Table entry instead.
++- **Detail drawer**: opens on clicking any row/item in Table or Inbox.
++  Handles rename, move (area), set light type, adopt / ignore / un-ignore,
++  dashboard toggle, and countdown start (presets + custom minutes, with a
++  "turn on first" toggle) / cancel. Shared between Table and Inbox rather
++  than duplicated per view; not used by Dashboard (see above).
+ - **Promote-a-switch dialog**: lists `list_promotable_switches` results not
+   already managed, with a one-click Promote button per entity.
+ - Polls `list_lights`/`list_inbox` every 15s and after every mutating
+@@ -60,9 +72,18 @@ same iterative loop as the backend's live testing:
+ ## Not built yet, in PRD order
+ 
+ - Rooms view (§7): Area-grouped cards, drag/drop, mobile "Move to room..."
+-  Table + Inbox cover the same underlying actions for now; this would be a
+-  different presentation of the same websocket API, not new backend work.
++  for the *admin* actions - not to be confused with the Dashboard view
++  above, which is grouped by area too but is a control surface, not an
++  editing one. Table + Inbox cover the same underlying admin actions for
++  now; Rooms would be a different presentation of the same websocket API,
++  not new backend work.
+ - First-run bulk adoption (§10): the Inbox surfaces new lights one at a
+   time; no dedicated multi-select bulk-review screen yet.
+ - Light detail view (§27) beyond what the shared drawer above covers
+-- Schedule presentation UI (§19)
++- Schedule presentation UI (§19): real schedule details per light (not
++  just the count badge) plus a deep link into the Scheduler Card - the
++  `deep_link_for_schedule` stub in the Niels Faber provider currently
++  always returns `None` since Scheduler Card doesn't expose a stable
++  per-schedule URL. A hover tooltip on the schedule badge explaining where
++  to actually edit a schedule (requested 2026-09-15) is a cheap partial
++  step here, not yet built either.
+diff --git a/custom_components/lighting_manager/frontend/lighting-manager-panel.js b/custom_components/lighting_manager/frontend/lighting-manager-panel.js
+index b5766d9..f4e691f 100644
+--- a/custom_components/lighting_manager/frontend/lighting-manager-panel.js
++++ b/custom_components/lighting_manager/frontend/lighting-manager-panel.js
+@@ -337,12 +337,39 @@ const CSS_TEXT = `
+   }
+   .lm-toast.visible { opacity: 1; }
+   .lm-checkbox-row.lm-toolbar-toggle { gap: 4px; font-size: 0.9em; color: var(--secondary-text-color); }
++  .lm-dash-group { margin-bottom: 24px; }
++  .lm-dash-group h3 { font-size: 1em; margin: 0 0 10px; color: var(--secondary-text-color); }
++  .lm-dash-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; }
++  .lm-dash-card {
++    border: 1px solid var(--divider-color);
++    border-radius: 8px;
++    padding: 12px;
++    background: var(--card-background-color);
++    display: flex;
++    flex-direction: column;
++    gap: 8px;
++  }
++  .lm-dash-card-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
++  .lm-dash-name { font-weight: 500; word-break: break-word; }
++  .lm-dash-countdown-active { font-size: 0.85em; color: var(--secondary-text-color); }
++  .lm-dash-presets { display: flex; flex-wrap: wrap; gap: 4px; }
++  .lm-dash-presets .lm-btn { padding: 4px 8px; font-size: 0.85em; }
++  .lm-dash-custom-row { display: flex; gap: 6px; align-items: center; }
++  .lm-dash-custom-row input[type=number] {
++    font: inherit;
++    width: 64px;
++    padding: 4px 6px;
++    border: 1px solid var(--divider-color);
++    border-radius: 4px;
++    background: var(--card-background-color);
++    color: var(--primary-text-color);
++  }
+ `;
+ 
+ class LightingManagerPanel extends HTMLElement {
+   constructor() {
+     super();
+-    this._view = "table"; // "table" | "inbox"
++    this._view = "table"; // "table" | "inbox" | "dashboard"
+     this._lights = [];
+     this._inbox = [];
+     this._lightsById = new Map();
+@@ -535,8 +562,15 @@ class LightingManagerPanel extends HTMLElement {
+     this._tabButtons = {
+       table: this._makeTabButton("Table", "table"),
+       inbox: this._makeTabButton("Inbox", "inbox"),
++      // Per-room quick-control surface (2026-09-15, Hans's pick for "what's
++      // next" - PRD §22). Deliberately separate from Table/Inbox: those are
++      // the admin surface for what a light *is*; this is the daily-use
++      // control surface for what a light *does right now* - the "click a
++      // light on the TV lounge dashboard, turn it off in 20 minutes"
++      // workflow that was replacing Simple Timer, not a management task.
++      dashboard: this._makeTabButton("Dashboard", "dashboard"),
+     };
+-    tabs.append(this._tabButtons.table, this._tabButtons.inbox);
++    tabs.append(this._tabButtons.table, this._tabButtons.inbox, this._tabButtons.dashboard);
+     toolbar.appendChild(tabs);
+ 
+     const spacer = document.createElement("div");
+@@ -658,8 +692,10 @@ class LightingManagerPanel extends HTMLElement {
+   _renderView() {
+     if (this._view === "table") {
+       this._renderTable();
+-    } else {
++    } else if (this._view === "inbox") {
+       this._renderInbox();
++    } else {
++      this._renderDashboard();
+     }
+   }
+ 
+@@ -839,6 +875,172 @@ class LightingManagerPanel extends HTMLElement {
+     this._bodyEl.appendChild(table);
+   }
+ 
++  // -- Dashboard view (per-room quick control, PRD §22) -------------------
++  //
++  // Only lights with dashboard_included=true show up here (the "Include on
++  // dashboard" checkbox in the detail drawer) - Table/Inbox already cover
++  // every discovered light, so this stays a deliberately curated surface
++  // rather than duplicating the full list. Grouped by area, each card is a
++  // self-contained power toggle + countdown control - no detail drawer
++  // involved, since this is meant to be a fast one-click surface, not an
++  // editing workflow.
++
++  _renderDashboard() {
++    this._bodyEl.innerHTML = "";
++    const eligible = this._lights.filter((l) => l.adopted && l.dashboard_included);
++    const filtered = this._applyFilter(eligible);
++
++    if (filtered.length === 0) {
++      const empty = document.createElement("div");
++      empty.className = "lm-empty";
++      empty.textContent = eligible.length === 0
++        ? 'No lights are on the dashboard yet — open a light in Table, adopt it, and check "Include on dashboard".'
++        : "No dashboard lights match your filter.";
++      this._bodyEl.appendChild(empty);
++      return;
++    }
++
++    const byArea = new Map();
++    for (const light of filtered) {
++      const areaName = light.area_id ? this._areaName(light.area_id) : "Unassigned";
++      if (!byArea.has(areaName)) byArea.set(areaName, []);
++      byArea.get(areaName).push(light);
++    }
++    // Alphabetical, with "Unassigned" pushed to the end rather than sorted
++    // in with real area names.
++    const areaNames = [...byArea.keys()].sort((a, b) => {
++      if (a === "Unassigned") return 1;
++      if (b === "Unassigned") return -1;
++      return a.localeCompare(b);
++    });
++
++    for (const areaName of areaNames) {
++      const lights = byArea.get(areaName).slice().sort((a, b) => a.name.localeCompare(b.name));
++      const section = document.createElement("div");
++      section.className = "lm-dash-group";
++      const heading = document.createElement("h3");
++      heading.textContent = areaName;
++      section.appendChild(heading);
++      const grid = document.createElement("div");
++      grid.className = "lm-dash-grid";
++      for (const light of lights) {
++        grid.appendChild(this._renderDashboardCard(light));
++      }
++      section.appendChild(grid);
++      this._bodyEl.appendChild(section);
++    }
++  }
++
++  _renderDashboardCard(light) {
++    const card = document.createElement("div");
++    card.className = "lm-dash-card";
++
++    const head = document.createElement("div");
++    head.className = "lm-dash-card-head";
++    const name = document.createElement("div");
++    name.className = "lm-dash-name";
++    name.textContent = light.name;
++    head.appendChild(name);
++    const state = document.createElement("span");
++    state.className = "lm-badge";
++    state.textContent = light.state === "on" ? "On" : "Off";
++    head.appendChild(state);
++    card.appendChild(head);
++
++    card.appendChild(
++      this._makeButton(
++        light.state === "on" ? "Turn off" : "Turn on",
++        () => this._toggleLightPower(light),
++        { primary: light.state === "on" }
++      )
++    );
++
++    if (light.countdown_remaining_seconds !== null && light.countdown_remaining_seconds !== undefined) {
++      const activeRow = document.createElement("div");
++      activeRow.className = "lm-dash-countdown-active";
++      activeRow.textContent = `Off in ${this._formatCountdown(light.countdown_remaining_seconds)}`;
++      card.appendChild(activeRow);
++      card.appendChild(
++        this._makeButton("Cancel", async () => {
++          await this._callAction("cancel_countdown", { entity_id: light.entity_id });
++        })
++      );
++    } else {
++      const presetRow = document.createElement("div");
++      presetRow.className = "lm-dash-presets";
++      for (const minutes of COUNTDOWN_PRESETS_MIN) {
++        presetRow.appendChild(
++          this._makeButton(`${minutes}m`, async () => {
++            // turn_on_first is always true here rather than exposing the
++            // checkbox that's in the detail drawer's fuller countdown UI -
++            // for the "click a light, turn it off in N minutes" workflow
++            // this dashboard exists for, the light is almost always
++            // already on, and re-issuing turn_on on an already-on light
++            // is a harmless no-op, so a compact card wins over parity
++            // with the drawer's every option.
++            await this._callAction("start_countdown", {
++              entity_id: light.entity_id,
++              minutes,
++              turn_on_first: true,
++            });
++          })
++        );
++      }
++      card.appendChild(presetRow);
++
++      const customRow = document.createElement("div");
++      customRow.className = "lm-dash-custom-row";
++      const customInput = document.createElement("input");
++      customInput.type = "number";
++      customInput.min = "1";
++      customInput.placeholder = "min";
++      customRow.appendChild(customInput);
++      customRow.appendChild(
++        this._makeButton("Start", async () => {
++          const minutes = parseFloat(customInput.value);
++          if (!minutes || minutes <= 0) return;
++          await this._callAction("start_countdown", {
++            entity_id: light.entity_id,
++            minutes,
++            turn_on_first: true,
++          });
++        })
++      );
++      card.appendChild(customRow);
++    }
++
++    card.appendChild(
++      this._makeButton("Manage", () => {
++        this._view = "table";
++        this._updateTabButtons();
++        this._renderView();
++        this._selectEntity(light.entity_id);
++      })
++    );
++
++    return card;
++  }
++
++  async _toggleLightPower(light) {
++    // Promoted switches (PRD §11.1) live under the switch.* domain, not
++    // light.* - calling the light domain's service on one would silently
++    // do nothing, so the domain has to come from the entity_id itself
++    // rather than being assumed.
++    const domain = light.entity_id.split(".")[0];
++    const service = light.state === "on" ? "turn_off" : "turn_on";
++    try {
++      await this._hass.callService(domain, service, { entity_id: light.entity_id });
++      this._showToast(service === "turn_on" ? "Light turned on" : "Light turned off");
++      // The list_lights poll only runs every 15s; a manual toggle should
++      // feel immediate, so give the physical light a moment to report its
++      // new state back to HA and then refresh early rather than making
++      // the user wait out the rest of the poll interval.
++      setTimeout(() => this._refreshAll(), 700);
++    } catch (err) {
++      this._showError(`Could not toggle light: ${this._formatError(err)}`);
++    }
++  }
++
+   // -- Inbox view ---------------------------------------------------------
+ 
+   _applyInboxFilter(items) {
