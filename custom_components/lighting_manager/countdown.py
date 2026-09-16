@@ -93,6 +93,21 @@ class CountdownManager:
         remaining = (active.expires_at - dt_util.utcnow()).total_seconds()
         return max(0, int(remaining))
 
+    def expires_at_iso(self, entity_id: str) -> str | None:
+        """Absolute expiry as an ISO timestamp, for clients that tick down
+        locally (PRD Revision - Lighting-Aware Dashboard Automation §4.3).
+
+        remaining_seconds() is a snapshot that goes stale the moment it's
+        read - exactly what caused the original complaint that the
+        countdown "only updates every 15s" (whatever the dashboard's own
+        refresh happens to be). A client holding the absolute expiry can
+        tick a display down every second itself with no further polling.
+        """
+        active = self._active.get(entity_id)
+        if active is None:
+            return None
+        return active.expires_at.isoformat()
+
     def is_active(self, entity_id: str) -> bool:
         return entity_id in self._active
 

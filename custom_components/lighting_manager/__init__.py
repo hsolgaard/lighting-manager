@@ -25,6 +25,13 @@ _LOGGER = logging.getLogger(__name__)
 
 PANEL_URL = "lighting-manager-panel"
 PANEL_JS_MODULE = f"/lighting_manager_static/{PANEL_URL}.js"
+# Served the same way as the panel itself (PRD Revision - Lighting-Aware
+# Dashboard Automation §4.3): ships as part of this integration, so
+# deploying a new build of Lighting Manager also updates the countdown
+# card - no separate file to keep in sync in Hans's www/ folder the way
+# light-scheduler-list-card.js (which Hans owns via his own Gist) needs.
+COUNTDOWN_CARD_URL = "lighting-manager-countdown-card"
+COUNTDOWN_CARD_JS_MODULE = f"/lighting_manager_static/{COUNTDOWN_CARD_URL}.js"
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -82,6 +89,9 @@ async def _async_register_panel(hass: HomeAssistant) -> None:
     static_path = hass.config.path(
         "custom_components/lighting_manager/frontend/lighting-manager-panel.js"
     )
+    countdown_card_static_path = hass.config.path(
+        "custom_components/lighting_manager/frontend/lighting-manager-countdown-card.js"
+    )
     # HA deprecated the synchronous hass.http.register_static_path() in
     # favour of an async, StaticPathConfig-based API at some point after
     # the 2024.3 release this scaffold was verified against (see the
@@ -92,10 +102,18 @@ async def _async_register_panel(hass: HomeAssistant) -> None:
         from homeassistant.components.http import StaticPathConfig
 
         await hass.http.async_register_static_paths(
-            [StaticPathConfig(PANEL_JS_MODULE, static_path, cache_headers=False)]
+            [
+                StaticPathConfig(PANEL_JS_MODULE, static_path, cache_headers=False),
+                StaticPathConfig(
+                    COUNTDOWN_CARD_JS_MODULE, countdown_card_static_path, cache_headers=False
+                ),
+            ]
         )
     except ImportError:
         hass.http.register_static_path(PANEL_JS_MODULE, static_path, cache_headers=False)
+        hass.http.register_static_path(
+            COUNTDOWN_CARD_JS_MODULE, countdown_card_static_path, cache_headers=False
+        )
 
     await panel_custom.async_register_panel(
         hass,

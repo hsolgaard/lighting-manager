@@ -116,6 +116,42 @@ async def test_start_countdown_via_websocket_turns_light_on(
     await coordinator.countdown.async_cancel("light.office_spots")
 
 
+async def test_list_lights_includes_countdown_expires_at(
+    api_hass: HomeAssistant, hass_ws_client
+) -> None:
+    async def _turn_on(call):
+        api_hass.states.async_set(call.data["entity_id"], "on")
+
+    async def _turn_off(call):
+        api_hass.states.async_set(call.data["entity_id"], "off")
+
+    api_hass.services.async_register("light", "turn_on", _turn_on)
+    api_hass.services.async_register("light", "turn_off", _turn_off)
+    api_hass.states.async_set("light.office_spots", "off")
+
+    client = await hass_ws_client(api_hass)
+    await client.send_json_auto_id(
+        {
+            "type": f"{DOMAIN}/start_countdown",
+            "entity_id": "light.office_spots",
+            "minutes": 5,
+        }
+    )
+    assert (await client.receive_json())["success"] is True
+
+    await client.send_json_auto_id({"type": f"{DOMAIN}/list_lights"})
+    listing = await client.receive_json()
+    light = next(
+        light
+        for light in listing["result"]["lights"]
+        if light["entity_id"] == "light.office_spots"
+    )
+    assert light["countdown_expires_at"] is not None
+
+    coordinator: LightingManagerCoordinator = api_hass.data[DOMAIN]["coordinator"]
+    await coordinator.countdown.async_cancel("light.office_spots")
+
+
 async def test_unignore_light_via_websocket(
     api_hass: HomeAssistant, hass_ws_client
 ) -> None:

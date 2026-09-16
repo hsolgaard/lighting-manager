@@ -333,6 +333,31 @@ async def test_list_promoted_switch_entity_ids_excludes_unrelated_and_other_area
     assert result == [lamp_switch]
 
 
+async def test_light_view_exposes_countdown_expires_at(
+    hass: HomeAssistant, coordinator: LightingManagerCoordinator
+) -> None:
+    """Backs the countdown card's client-side ticking (PRD Revision §4.3) -
+    a client needs the absolute expiry, not just a remaining-seconds
+    snapshot that goes stale the moment it's read."""
+    hass.states.async_set("light.countdown_test", "on")
+
+    view = next(
+        v for v in coordinator.async_list_lights() if v.entity_id == "light.countdown_test"
+    )
+    assert view.countdown_expires_at is None
+
+    await coordinator.countdown.async_start(
+        "light.countdown_test", minutes=5, turn_on_first=False
+    )
+
+    view = next(
+        v for v in coordinator.async_list_lights() if v.entity_id == "light.countdown_test"
+    )
+    assert view.countdown_expires_at is not None
+
+    await coordinator.countdown.async_cancel("light.countdown_test")
+
+
 async def test_list_area_lights_only_includes_adopted_non_ignored(
     hass: HomeAssistant, coordinator: LightingManagerCoordinator
 ) -> None:

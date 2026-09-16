@@ -186,6 +186,26 @@ async def test_restore_all_reschedules_future_countdown(
     assert hass.states.get(ENTITY_ID).state == "off"
 
 
+async def test_expires_at_iso_returns_none_when_inactive(
+    hass: HomeAssistant, manager: CountdownManager
+) -> None:
+    assert manager.expires_at_iso(ENTITY_ID) is None
+
+
+async def test_expires_at_iso_matches_scheduled_expiry(
+    hass: HomeAssistant, manager: CountdownManager, light_services: list[str]
+) -> None:
+    """Regression coverage for the countdown card's client-side ticking (PRD
+    Revision §4.3): the card ticks from this absolute timestamp rather than
+    re-polling remaining_seconds, so it must actually match the schedule."""
+    await manager.async_start(ENTITY_ID, minutes=5)
+
+    expires_at = dt_util.parse_datetime(manager.expires_at_iso(ENTITY_ID))
+    remaining = (expires_at - dt_util.utcnow()).total_seconds()
+
+    assert 295 <= remaining <= 300
+
+
 async def test_restore_all_applies_expired_countdown_immediately(
     hass: HomeAssistant,
     manager: CountdownManager,

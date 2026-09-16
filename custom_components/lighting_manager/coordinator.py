@@ -52,6 +52,7 @@ class LightView:
     dashboard_included: bool
     schedule_count: int
     countdown_remaining_seconds: int | None
+    countdown_expires_at: str | None
     source_integration: str | None
     area_mismatch: tuple[str, str] | None
     status: str
@@ -205,6 +206,7 @@ class LightingManagerCoordinator:
             dashboard_included=record.dashboard_included,
             schedule_count=schedule_count,
             countdown_remaining_seconds=self.countdown.remaining_seconds(entity_id),
+            countdown_expires_at=self.countdown.expires_at_iso(entity_id),
             source_integration=registry.async_get_source_integration(self.hass, entity_id),
             area_mismatch=area_mismatch,
             status=status,
