@@ -6,4 +6,7 @@ turn_off_area:
     has adopted as promoted lamps in those Areas - never other switches
     sharing the same Area.
   target:
-    area:
+    entity:
+      domain:
+        - light
+        - switch
