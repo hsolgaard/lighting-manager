@@ -220,11 +220,21 @@ const CSS_TEXT = `
     .lm-main.has-detail { grid-template-columns: 1fr 380px; }
   }
   .lm-body { overflow: auto; padding: 8px 16px 16px; }
-  /* ha-data-table sizes itself from its parent's height, which is circular
-   * here and collapsed it to a few rows. It is switched to auto-height in
-   * _ensureNativeDataTable (it then sizes itself to its rows and .lm-body
-   * scrolls); this rule only makes the host a block. */
-  .lm-body > ha-data-table { display: block; }
+  /* ha-data-table scrolls its own rows (sticky header) but needs a definite
+   * height, and Safari does not resolve percentage heights through the
+   * grid/shadow-DOM chain here. Pinning it to all four edges of .lm-body
+   * (position:absolute) gives it a definite size in every browser; the
+   * table then scrolls internally. Only the table view uses this - the
+   * Inbox/Dashboard views are normal flowing content in .lm-body. */
+  .lm-body { position: relative; }
+  .lm-body > ha-data-table {
+    display: block;
+    position: absolute;
+    top: 8px;
+    left: 16px;
+    right: 16px;
+    bottom: 16px;
+  }
   .lm-detail {
     overflow: auto;
     border-top: 1px solid var(--divider-color);
@@ -811,14 +821,6 @@ class LightingManagerPanel extends HTMLElement {
     if (this._dataTableEl) return this._dataTableEl;
     const table = document.createElement("ha-data-table");
     table.clickable = true;
-    // Render every row at natural height (HA computes the pixel height from
-    // the row count) rather than sizing from the parent, so the table can
-    // never collapse; .lm-body provides the scrolling. Set as an attribute
-    // as well as a property: the attribute is honoured even if the element
-    // has not been upgraded yet when it is created (the property was
-    // observed to stay false on Hans's Safari).
-    table.setAttribute("auto-height", "");
-    table.autoHeight = true;
     table.hass = this._hass;
     table.addEventListener("row-click", (ev) => {
       const id = ev.detail && ev.detail.id;
@@ -1683,4 +1685,4 @@ class LightingManagerPanel extends HTMLElement {
 
 customElements.define("lighting-manager-panel", LightingManagerPanel);
 
-console.info("%c LIGHTING-MANAGER-PANEL %c table: auto-height + viewport-height host ", "color:white;background:#03a9f4;font-weight:700;", "color:#03a9f4;background:white;font-weight:700;");
+console.info("%c LIGHTING-MANAGER-PANEL %c table: pinned fixed-size, internal scroll ", "color:white;background:#03a9f4;font-weight:700;", "color:#03a9f4;background:white;font-weight:700;");
