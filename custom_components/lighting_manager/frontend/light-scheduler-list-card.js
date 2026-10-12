@@ -21,6 +21,23 @@ class LightSchedulerListCard extends HTMLElement {
   //                             on Lighting Manager, so existing dashboards
   //                             keep working until you migrate them.
   // If both are given, area: wins.
+  // area: may be an Area id (living_room) or its name (Lounge Big), matched
+  // case/punctuation-insensitively against Home Assistant's own Area
+  // registry - Lighting Manager keeps no Area list of its own.
+  _resolveArea() {
+    const value = this.config?.area;
+    const areas = this._hass?.areas || {};
+    if (!value || !Object.keys(areas).length) return { id: value };
+    if (areas[value]) return { id: value };
+
+    const norm = s => String(s).toLowerCase().replace(/[^a-z0-9]+/g, '');
+    const hit = Object.values(areas).find(a => norm(a.name) === norm(value));
+    if (hit) return { id: hit.area_id };
+
+    const known = Object.values(areas).map(a => `${a.name} (${a.area_id})`).sort().join(', ');
+    return { id: null, error: `Area "${value}" not found. Known Areas: ${known}` };
+  }
+
   _isAreaMode() {
     return !!(this.config && typeof this.config.area === 'string' && this.config.area);
   }
@@ -122,10 +139,20 @@ class LightSchedulerListCard extends HTMLElement {
     const token = ++this._fetchToken;
     const areaBeingFetched = this.config.area;
 
+    const resolved = this._resolveArea();
+    if (!resolved.id) {
+      this._loaded = true;
+      this._fetchedArea = areaBeingFetched;
+      this._resolvedLights = [];
+      this._error = resolved.error;
+      this._render();
+      return;
+    }
+
     try {
       const result = await this._hass.connection.sendMessagePromise({
         type: 'lighting_manager/list_area_lights',
-        area_id: areaBeingFetched
+        area_id: resolved.id
       });
 
       if (token !== this._fetchToken) return; // superseded by a newer fetch
@@ -169,7 +196,7 @@ class LightSchedulerListCard extends HTMLElement {
     try {
       await this._hass.connection.sendMessagePromise({
         type: 'lighting_manager/set_area_light_order',
-        area_id: this.config.area,
+        area_id: this._resolveArea().id,
         entity_ids: this._resolvedLights.map(x => x.entity)
       });
       this._error = null;
@@ -574,7 +601,7 @@ class LightSchedulerListCard extends HTMLElement {
     const areaMode = this._isAreaMode();
     // Reordering only exists in area mode (the order is stored by Lighting Manager).
     const canReorder = areaMode && !!this._hass?.user?.is_admin;
-    const area = areaMode ? this._hass?.areas?.[this.config.area] : null;
+    const area = areaMode ? this._hass?.areas?.[this._resolveArea().id] : null;
 
     const roomTitle = this._escape(
       this.config.title ||

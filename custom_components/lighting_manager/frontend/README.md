@@ -101,6 +101,15 @@ Two cards ship with the integration and are loaded globally via
   Still uses Niels Faber's Scheduler component for the schedules
   themselves and Browser Mod for the edit popup.
 
+- `custom:lighting-manager-scheduler-card` - `area: <id or name>` plus any
+  Scheduler Card option (`title`, `sort_by`, `exclude`, ...). A thin wrapper
+  that asks Lighting Manager for the Area's adopted lights and builds Niels
+  Faber's `custom:scheduler-card` with that `include:` list (Scheduler Card
+  must be installed; none of its code is copied).
+
+`area:` on both Area-aware cards accepts the Area id (`living_room`) or its
+name (`Lounge Big`), resolved against Home Assistant's own Area registry.
+
 If you previously loaded `light-scheduler-list-card.js` from
 `/local/` as a Lovelace resource, remove that resource and the file in
 `www/`; otherwise whichever copy loads first wins.
