@@ -144,7 +144,11 @@ const CSS_TEXT = `\
    * itself, so it collapsed to its content's height instead of filling\
    * the available viewport - the "lots of scrolling" bug Hans hit\
    * live. The real host element is the custom element tag itself. */\
-  lighting-manager-panel \{ display: block; height: 100%; \}\
+  /* Safari does not resolve height:100% for a custom-element host inside HA's\
+   * shadow-DOM panel container (measured on Hans's Mac: host 385px in an\
+   * 833px viewport), so size to the viewport explicitly. Custom panels have\
+   * no HA header above them, so the full viewport height is correct. */\
+  lighting-manager-panel \{ display: block; height: 100vh; height: 100dvh; \}\
   .lm-root \{\
     display: flex;\
     flex-direction: column;\
@@ -215,6 +219,7 @@ const CSS_TEXT = `\
     flex: 1;\
     display: grid;\
     grid-template-columns: 1fr;\
+    grid-template-rows: minmax(0, 1fr);\
     overflow: hidden;\
     min-height: 0;\
   \}\
@@ -815,13 +820,12 @@ class LightingManagerPanel extends HTMLElement \{\
     table.clickable = true;\
     // Render every row at natural height (HA computes the pixel height from\
     // the row count) rather than sizing from the parent, so the table can\
-    // never collapse; .lm-body provides the scrolling. If a future HA\
-    // frontend drops the property, fall back to filling the parent.\
-    if ("autoHeight" in table) \{\
-      table.autoHeight = true;\
-    \} else \{\
-      table.style.height = "100%";\
-    \}\
+    // never collapse; .lm-body provides the scrolling. Set as an attribute\
+    // as well as a property: the attribute is honoured even if the element\
+    // has not been upgraded yet when it is created (the property was\
+    // observed to stay false on Hans's Safari).\
+    table.setAttribute("auto-height", "");\
+    table.autoHeight = true;\
     table.hass = this._hass;\
     table.addEventListener("row-click", (ev) => \{\
       const id = ev.detail && ev.detail.id;\
@@ -1684,4 +1688,6 @@ class LightingManagerPanel extends HTMLElement \{\
   \}\
 \}\
 \
-customElements.define("lighting-manager-panel", LightingManagerPanel);}
+customElements.define("lighting-manager-panel", LightingManagerPanel);\
+\
+console.info("%c LIGHTING-MANAGER-PANEL %c table: auto-height + viewport-height host ", "color:white;background:#03a9f4;font-weight:700;", "color:#03a9f4;background:white;font-weight:700;");}
