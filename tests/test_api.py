@@ -323,3 +323,56 @@ async def test_countdown_rejects_non_light_or_switch_entity(
     response = await client.receive_json()
 
     assert response["success"] is False
+
+
+async def test_set_tile_width_via_websocket_then_reflected_in_list(
+    api_hass: HomeAssistant, hass_ws_client
+) -> None:
+    api_hass.states.async_set("light.spots", "off")
+    client = await hass_ws_client(api_hass)
+
+    await client.send_json_auto_id({"type": f"{DOMAIN}/adopt_light", "entity_id": "light.spots"})
+    assert (await client.receive_json())["success"] is True
+
+    await client.send_json_auto_id(
+        {"type": f"{DOMAIN}/set_tile_width", "entity_id": "light.spots", "width": "full"}
+    )
+    assert (await client.receive_json())["success"] is True
+
+    await client.send_json_auto_id({"type": f"{DOMAIN}/list_lights"})
+    lights = (await client.receive_json())["result"]["lights"]
+    assert next(l for l in lights if l["entity_id"] == "light.spots")["tile_width"] == "full"
+
+
+async def test_tile_width_defaults_to_half(api_hass: HomeAssistant, hass_ws_client) -> None:
+    api_hass.states.async_set("light.kitchen", "on")
+    client = await hass_ws_client(api_hass)
+
+    await client.send_json_auto_id({"type": f"{DOMAIN}/list_lights"})
+    lights = (await client.receive_json())["result"]["lights"]
+    assert next(l for l in lights if l["entity_id"] == "light.kitchen")["tile_width"] == "half"
+
+
+async def test_set_tile_width_rejects_unknown_value(
+    api_hass: HomeAssistant, hass_ws_client
+) -> None:
+    client = await hass_ws_client(api_hass)
+
+    await client.send_json_auto_id(
+        {"type": f"{DOMAIN}/set_tile_width", "entity_id": "light.spots", "width": "huge"}
+    )
+    response = await client.receive_json()
+    assert response["success"] is False
+
+
+async def test_set_tile_width_rejected_for_non_admin(
+    api_hass: HomeAssistant, hass_ws_client, hass_read_only_access_token
+) -> None:
+    client = await hass_ws_client(api_hass, hass_read_only_access_token)
+
+    await client.send_json_auto_id(
+        {"type": f"{DOMAIN}/set_tile_width", "entity_id": "light.spots", "width": "full"}
+    )
+    response = await client.receive_json()
+    assert response["success"] is False
+    assert response["error"]["code"] == "unauthorized"

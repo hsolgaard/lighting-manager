@@ -26,7 +26,10 @@ async def test_cards_are_served_and_registered_as_extra_js(hass: HomeAssistant) 
     ), patch.object(integration.frontend, "add_extra_js_url") as add_url:
         await integration._async_register_panel(hass)
 
-    registered = {c.args[1] for c in add_url.call_args_list}
+    urls = [c.args[1] for c in add_url.call_args_list]
+    # Each URL carries a ?v=<mtime> cache-busting version.
+    assert all("?v=" in u for u in urls)
+    registered = {u.split("?")[0] for u in urls}
     assert registered == {f"{STATIC_URL_PREFIX}/{name}" for name in CARD_FILES}
 
     # Modern cores use async_register_static_paths(StaticPathConfig list);

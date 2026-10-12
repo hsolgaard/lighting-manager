@@ -11,6 +11,7 @@ this file just wires them together per config entry.
 from __future__ import annotations
 
 import logging
+import os
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
@@ -33,6 +34,7 @@ CARD_FILES = (
     "lighting-manager-countdown-card.js",
     "light-scheduler-list-card.js",
     "lighting-manager-scheduler-card.js",
+    "lighting-manager-room-card.js",
 )
 STATIC_URL_PREFIX = "/lighting_manager_static"
 PANEL_JS_MODULE = f"{STATIC_URL_PREFIX}/{PANEL_URL}.js"
@@ -131,5 +133,14 @@ async def _async_register_panel(hass: HomeAssistant) -> None:
     # After the panel registration (which pulls in the frontend), so the
     # frontend's url registry is guaranteed to exist. add_extra_js_url is
     # idempotent (a set), so a reload doesn't duplicate the entries.
-    for url in card_paths:
-        frontend.add_extra_js_url(hass, url)
+    #
+    # The URL carries the file's modification time as a version, so a
+    # new release is always fetched fresh - browsers (Safari especially)
+    # otherwise keep running a cached copy of a script whose URL has not
+    # changed. Takes effect after a Home Assistant restart.
+    for url, path in card_paths.items():
+        try:
+            version = int(os.path.getmtime(path))
+        except OSError:
+            version = 0
+        frontend.add_extra_js_url(hass, f"{url}?v={version}")

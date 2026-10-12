@@ -50,6 +50,7 @@ class LightView:
     ignored: bool
     light_type: str | None
     dashboard_included: bool
+    tile_width: str
     schedule_count: int
     countdown_remaining_seconds: int | None
     countdown_expires_at: str | None
@@ -204,6 +205,7 @@ class LightingManagerCoordinator:
             ignored=record.ignored,
             light_type=registry.get_light_type(self.hass, entity_id),
             dashboard_included=record.dashboard_included,
+            tile_width=record.tile_width,
             schedule_count=schedule_count,
             countdown_remaining_seconds=self.countdown.remaining_seconds(entity_id),
             countdown_expires_at=self.countdown.expires_at_iso(entity_id),
@@ -319,6 +321,12 @@ class LightingManagerCoordinator:
         key = registry.stable_key_for_entity(self.hass, entity_id)
         record = self.store.get_light(key)
         record.dashboard_included = included
+        await self.store.async_set_light(key, record)
+
+    async def async_set_tile_width(self, entity_id: str, width: str) -> None:
+        key = registry.stable_key_for_entity(self.hass, entity_id)
+        record = self.store.get_light(key)
+        record.tile_width = width
         await self.store.async_set_light(key, record)
 
     def async_list_promoted_switch_entity_ids(self, area_ids: list[str]) -> list[str]:

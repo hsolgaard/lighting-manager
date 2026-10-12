@@ -48,6 +48,8 @@ class ManagedLightRecord:
     ignored: bool = False
     light_type_label: str | None = None
     dashboard_included: bool = True
+    # Room card (PRD Revision §4.6): "half" = two tiles per row, "full" = one.
+    tile_width: str = "half"
     promoted_switch: bool = False
     # Historical identity, kept so a future replacement workflow (P1,
     # PRD §24) has something to offer the migration onto a new entity.

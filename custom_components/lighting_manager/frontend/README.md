@@ -98,6 +98,11 @@ Two cards ship with the integration and are loaded globally via
   Home Assistant tile (same look as every other tile; any tile option such
   as `name` or `icon` is passed through). Tap toggles; double-tap opens a
   countdown popup.
+- `custom:lighting-manager-room-card` - `area: living_room` (id or name);
+  optional `columns: 2`. Draws every adopted, shown-on-dashboard light in
+  the Area as a countdown tile, using each light's Lighting Manager
+  settings (name, order, tile width half/full). Nothing to maintain: add
+  or hide a light in Lighting Manager and the card follows.
 - `custom:light-scheduler-list-card` - `area: <area_id>` (Lighting Manager
   resolves the adopted lights, manual order) or the legacy `lights:` list.
   Still uses Niels Faber's Scheduler component for the schedules

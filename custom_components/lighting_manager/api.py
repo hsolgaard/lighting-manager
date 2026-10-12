@@ -41,6 +41,7 @@ def async_register_websocket_commands(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_rename_light)
     websocket_api.async_register_command(hass, ws_set_light_type)
     websocket_api.async_register_command(hass, ws_set_dashboard_included)
+    websocket_api.async_register_command(hass, ws_set_tile_width)
     websocket_api.async_register_command(hass, ws_promote_switch)
     websocket_api.async_register_command(hass, ws_start_countdown)
     websocket_api.async_register_command(hass, ws_cancel_countdown)
@@ -206,6 +207,20 @@ async def ws_set_light_type(hass: HomeAssistant, connection, msg) -> None:
 @websocket_api.async_response
 async def ws_set_dashboard_included(hass: HomeAssistant, connection, msg) -> None:
     await _coordinator(hass).async_set_dashboard_included(msg["entity_id"], msg["included"])
+    connection.send_result(msg["id"])
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): f"{DOMAIN}/set_tile_width",
+        vol.Required("entity_id"): str,
+        vol.Required("width"): vol.In(["half", "full"]),
+    }
+)
+@websocket_api.async_response
+async def ws_set_tile_width(hass: HomeAssistant, connection, msg) -> None:
+    await _coordinator(hass).async_set_tile_width(msg["entity_id"], msg["width"])
     connection.send_result(msg["id"])
 
 

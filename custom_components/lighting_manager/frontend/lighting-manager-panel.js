@@ -112,6 +112,7 @@ const ACTION_SUCCESS_MESSAGES = {
   move_light: "Area updated",
   set_light_type: "Type updated",
   set_dashboard_included: "Dashboard setting updated",
+  set_tile_width: "Tile width updated",
   start_countdown: "Countdown started",
   cancel_countdown: "Countdown cancelled",
   promote_switch: "Switch added as a light",
@@ -1453,6 +1454,33 @@ class LightingManagerPanel extends HTMLElement {
     dashLabel.textContent = "Include on dashboard";
     dashRow.append(dashCheckbox, dashLabel);
     this._detailEl.appendChild(dashRow);
+
+    // -- Tile width (room card) --
+    const widthField = this._makeFieldRow(
+      "Tile width",
+      () => {
+        const select = document.createElement("select");
+        for (const [value, label] of [
+          ["half", "Half (two per row)"],
+          ["full", "Full (one per row)"],
+        ]) {
+          const opt = document.createElement("option");
+          opt.value = value;
+          opt.textContent = label;
+          select.appendChild(opt);
+        }
+        select.value = light.tile_width || "half";
+        return select;
+      },
+      "Set width",
+      async (select) => {
+        await this._callAction("set_tile_width", {
+          entity_id: light.entity_id,
+          width: select.value,
+        });
+      }
+    );
+    this._detailEl.appendChild(widthField.row);
 
     // -- Countdown --
     const countdownTitle = document.createElement("div");
