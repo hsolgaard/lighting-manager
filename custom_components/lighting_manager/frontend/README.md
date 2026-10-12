@@ -87,3 +87,20 @@ same iterative loop as the backend's live testing:
   per-schedule URL. A hover tooltip on the schedule badge explaining where
   to actually edit a schedule (requested 2026-09-15) is a cheap partial
   step here, not yet built either.
+
+## Dashboard cards (auto-registered)
+
+Two cards ship with the integration and are loaded globally via
+`frontend.add_extra_js_url` - **no Lovelace Resources entry and no file in
+`www/` is needed**; deploying the integration updates them:
+
+- `custom:lighting-manager-countdown-card` - `entity: light.x`; double-tap
+  the row for the per-light countdown.
+- `custom:light-scheduler-list-card` - `area: <area_id>` (Lighting Manager
+  resolves the adopted lights, manual order) or the legacy `lights:` list.
+  Still uses Niels Faber's Scheduler component for the schedules
+  themselves and Browser Mod for the edit popup.
+
+If you previously loaded `light-scheduler-list-card.js` from
+`/local/` as a Lovelace resource, remove that resource and the file in
+`www/`; otherwise whichever copy loads first wins.

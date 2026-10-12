@@ -24,14 +24,17 @@ from .services import async_register_services, async_unregister_services
 _LOGGER = logging.getLogger(__name__)
 
 PANEL_URL = "lighting-manager-panel"
-PANEL_JS_MODULE = f"/lighting_manager_static/{PANEL_URL}.js"
-# Served the same way as the panel itself (PRD Revision - Lighting-Aware
-# Dashboard Automation §4.3): ships as part of this integration, so
-# deploying a new build of Lighting Manager also updates the countdown
-# card - no separate file to keep in sync in Hans's www/ folder the way
-# light-scheduler-list-card.js (which Hans owns via his own Gist) needs.
-COUNTDOWN_CARD_URL = "lighting-manager-countdown-card"
-COUNTDOWN_CARD_JS_MODULE = f"/lighting_manager_static/{COUNTDOWN_CARD_URL}.js"
+# Dashboard cards that ship inside this integration (PRD Revision -
+# Lighting-Aware Dashboard Automation §4.2/§4.3). They are served from the
+# same static prefix as the panel and registered globally with
+# frontend.add_extra_js_url, so installing/updating Lighting Manager is the
+# only step: no Lovelace "Resources" entry and no file copied into www/.
+CARD_FILES = (
+    "lighting-manager-countdown-card.js",
+    "light-scheduler-list-card.js",
+)
+STATIC_URL_PREFIX = "/lighting_manager_static"
+PANEL_JS_MODULE = f"{STATIC_URL_PREFIX}/{PANEL_URL}.js"
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -86,12 +89,12 @@ async def _async_register_panel(hass: HomeAssistant) -> None:
     entry - is proven end-to-end. The actual Rooms/Table/Inbox UI is the
     next major chunk of work, not part of this initial build.
     """
-    static_path = hass.config.path(
-        "custom_components/lighting_manager/frontend/lighting-manager-panel.js"
-    )
-    countdown_card_static_path = hass.config.path(
-        "custom_components/lighting_manager/frontend/lighting-manager-countdown-card.js"
-    )
+    frontend_dir = "custom_components/lighting_manager/frontend/"
+    static_path = hass.config.path(frontend_dir + "lighting-manager-panel.js")
+    card_paths = {
+        f"{STATIC_URL_PREFIX}/{name}": hass.config.path(frontend_dir + name)
+        for name in CARD_FILES
+    }
     # HA deprecated the synchronous hass.http.register_static_path() in
     # favour of an async, StaticPathConfig-based API at some point after
     # the 2024.3 release this scaffold was verified against (see the
@@ -102,18 +105,16 @@ async def _async_register_panel(hass: HomeAssistant) -> None:
         from homeassistant.components.http import StaticPathConfig
 
         await hass.http.async_register_static_paths(
-            [
-                StaticPathConfig(PANEL_JS_MODULE, static_path, cache_headers=False),
-                StaticPathConfig(
-                    COUNTDOWN_CARD_JS_MODULE, countdown_card_static_path, cache_headers=False
-                ),
+            [StaticPathConfig(PANEL_JS_MODULE, static_path, cache_headers=False)]
+            + [
+                StaticPathConfig(url, path, cache_headers=False)
+                for url, path in card_paths.items()
             ]
         )
     except ImportError:
         hass.http.register_static_path(PANEL_JS_MODULE, static_path, cache_headers=False)
-        hass.http.register_static_path(
-            COUNTDOWN_CARD_JS_MODULE, countdown_card_static_path, cache_headers=False
-        )
+        for url, path in card_paths.items():
+            hass.http.register_static_path(url, path, cache_headers=False)
 
     await panel_custom.async_register_panel(
         hass,
@@ -125,3 +126,9 @@ async def _async_register_panel(hass: HomeAssistant) -> None:
         require_admin=False,
         embed_iframe=False,
     )
+
+    # After the panel registration (which pulls in the frontend), so the
+    # frontend's url registry is guaranteed to exist. add_extra_js_url is
+    # idempotent (a set), so a reload doesn't duplicate the entries.
+    for url in card_paths:
+        frontend.add_extra_js_url(hass, url)
