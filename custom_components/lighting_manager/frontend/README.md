@@ -94,8 +94,10 @@ Two cards ship with the integration and are loaded globally via
 `frontend.add_extra_js_url` - **no Lovelace Resources entry and no file in
 `www/` is needed**; deploying the integration updates them:
 
-- `custom:lighting-manager-countdown-card` - `entity: light.x`; double-tap
-  the row for the per-light countdown.
+- `custom:lighting-manager-countdown-card` - `entity: light.x`; a native
+  Home Assistant tile (same look as every other tile; any tile option such
+  as `name` or `icon` is passed through). Tap toggles; double-tap opens a
+  countdown popup.
 - `custom:light-scheduler-list-card` - `area: <area_id>` (Lighting Manager
   resolves the adopted lights, manual order) or the legacy `lights:` list.
   Still uses Niels Faber's Scheduler component for the schedules
