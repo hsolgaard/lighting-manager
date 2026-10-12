@@ -215,6 +215,12 @@ const CSS_TEXT = `
     .lm-main.has-detail { grid-template-columns: 1fr 380px; }
   }
   .lm-body { overflow: auto; padding: 8px 16px 16px; }
+  /* ha-data-table virtualises its rows and so needs a definite height from
+   * its parent; with none it collapses to a few rows' worth and the rest are
+   * unreachable. .lm-body is a stretched grid item (definite height), so
+   * height:100% here makes the table fill the whole available area and
+   * scroll internally, the way HA's own table pages do. */
+  .lm-body > ha-data-table { display: block; height: 100%; }
   .lm-detail {
     overflow: auto;
     border-top: 1px solid var(--divider-color);
