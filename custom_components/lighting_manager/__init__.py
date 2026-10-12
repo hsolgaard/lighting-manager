@@ -106,6 +106,11 @@ async def _async_register_panel(hass: HomeAssistant) -> None:
         f"{STATIC_URL_PREFIX}/{name}": hass.config.path(frontend_dir + name)
         for name in CARD_FILES
     }
+    # Caching is on: every script is registered below with ?v=<file mtime>
+    # in its URL, so a new release has a new URL and is fetched fresh,
+    # while unchanged files come from the browser cache (fast start-up,
+    # shorter "Configuration error" flash). A deploy therefore needs a
+    # Home Assistant restart to take effect.
     # HA deprecated the synchronous hass.http.register_static_path() in
     # favour of an async, StaticPathConfig-based API at some point after
     # the 2024.3 release this scaffold was verified against (see the
@@ -116,16 +121,16 @@ async def _async_register_panel(hass: HomeAssistant) -> None:
         from homeassistant.components.http import StaticPathConfig
 
         await hass.http.async_register_static_paths(
-            [StaticPathConfig(PANEL_JS_MODULE, static_path, cache_headers=False)]
+            [StaticPathConfig(PANEL_JS_MODULE, static_path, cache_headers=True)]
             + [
-                StaticPathConfig(url, path, cache_headers=False)
+                StaticPathConfig(url, path, cache_headers=True)
                 for url, path in card_paths.items()
             ]
         )
     except ImportError:
-        hass.http.register_static_path(PANEL_JS_MODULE, static_path, cache_headers=False)
+        hass.http.register_static_path(PANEL_JS_MODULE, static_path, cache_headers=True)
         for url, path in card_paths.items():
-            hass.http.register_static_path(url, path, cache_headers=False)
+            hass.http.register_static_path(url, path, cache_headers=True)
 
     await panel_custom.async_register_panel(
         hass,

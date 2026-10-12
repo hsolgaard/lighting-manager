@@ -113,6 +113,7 @@ const ACTION_SUCCESS_MESSAGES = {
   set_light_type: "Type updated",
   set_dashboard_included: "Dashboard setting updated",
   set_tile_width: "Tile width updated",
+  set_scheduling_included: "Scheduling setting updated",
   start_countdown: "Countdown started",
   cancel_countdown: "Countdown cancelled",
   promote_switch: "Switch added as a light",
@@ -1454,6 +1455,25 @@ class LightingManagerPanel extends HTMLElement {
     dashLabel.textContent = "Include on dashboard";
     dashRow.append(dashCheckbox, dashLabel);
     this._detailEl.appendChild(dashRow);
+
+    // -- Include in room scheduling (Scheduler Card wrapper) --
+    const schedRow = document.createElement("div");
+    schedRow.className = "lm-checkbox-row lm-field";
+    const schedCheckbox = document.createElement("input");
+    schedCheckbox.type = "checkbox";
+    schedCheckbox.id = "lm-sched-included";
+    schedCheckbox.checked = light.scheduling_included !== false;
+    schedCheckbox.addEventListener("change", async () => {
+      await this._callAction("set_scheduling_included", {
+        entity_id: light.entity_id,
+        included: schedCheckbox.checked,
+      });
+    });
+    const schedLabel = document.createElement("label");
+    schedLabel.htmlFor = "lm-sched-included";
+    schedLabel.textContent = "Include in room scheduling";
+    schedRow.append(schedCheckbox, schedLabel);
+    this._detailEl.appendChild(schedRow);
 
     // -- Tile width (room card) --
     const widthField = this._makeFieldRow(

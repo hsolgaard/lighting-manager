@@ -120,3 +120,8 @@ name (`Lounge Big`), resolved against Home Assistant's own Area registry.
 If you previously loaded `light-scheduler-list-card.js` from
 `/local/` as a Lovelace resource, remove that resource and the file in
 `www/`; otherwise whichever copy loads first wins.
+
+Notes (v-next): the schedules list card opens its edit dialog itself, so
+Browser Mod is no longer needed. Bundled scripts are cached by the browser
+under a `?v=<file mtime>` URL; after deploying, restart Home Assistant so
+the new version is registered.

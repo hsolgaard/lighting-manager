@@ -1,5 +1,5 @@
 /**
- * Lighting Manager Scheduler Card  v1.0.0
+ * Lighting Manager Scheduler Card  v1.1.0
  *
  * A thin, Area-aware wrapper around Niels Faber's Scheduler Card
  * (https://github.com/nielsfaber/scheduler-card, which must be installed).
@@ -12,7 +12,8 @@
  *
  * Every other option (sort_by, display_options, exclude, time_step, tags,
  * show_add_button, ...) is passed straight through to the Scheduler Card.
- * Only lights adopted (and not ignored) in Lighting Manager are offered.
+ * Only lights adopted (and not ignored) in Lighting Manager are offered,
+ * minus any with "Include in room scheduling" switched off in its panel.
  * Nothing of the Scheduler Card's code is copied - this builds the real
  * `custom:scheduler-card` at runtime and hands it the resolved list.
  *
@@ -115,7 +116,10 @@ class LightingManagerSchedulerCard extends HTMLElement {
         area_id: resolved.id
       });
       if (token !== this._fetchToken) return;
-      this._lights = (result.lights || []).map(l => l.entity_id);
+      // Lights switched off for room scheduling in Lighting Manager are left out.
+      this._lights = (result.lights || [])
+        .filter(l => l.scheduling_included !== false)
+        .map(l => l.entity_id);
       this._error = null;
     } catch (err) {
       if (token !== this._fetchToken) return;
@@ -152,7 +156,9 @@ class LightingManagerSchedulerCard extends HTMLElement {
     if (this._error) return this._message(this._error, true);
     if (!this._loaded) return this._message('Loading…');
     if (!this._lights.length) {
-      return this._message('No lights adopted by Lighting Manager in this Area yet.');
+      return this._message(
+        'No lights available for scheduling in this Area - adopt some in Lighting Manager (and check "Include in room scheduling").'
+      );
     }
 
     // Rebuild the inner Scheduler Card only when its configuration actually
@@ -207,7 +213,7 @@ if (!window.customCards.some(x => x.type === 'lighting-manager-scheduler-card'))
 }
 
 console.info(
-  '%c LIGHTING-MANAGER-SCHEDULER-CARD %c v1.0.0 ',
+  '%c LIGHTING-MANAGER-SCHEDULER-CARD %c v1.1.0 ',
   'color: white; background: #03a9f4; font-weight: 700;',
   'color: #03a9f4; background: white; font-weight: 700;'
 );

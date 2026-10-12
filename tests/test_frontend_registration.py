@@ -36,10 +36,12 @@ async def test_cards_are_served_and_registered_as_extra_js(hass: HomeAssistant) 
     # older ones (incl. the sandbox's pinned 2024.3) fall back to
     # register_static_path(url, path) - accept whichever path was taken.
     if hass.http.async_register_static_paths.called:
-        served = {
-            cfg.url_path
-            for cfg in hass.http.async_register_static_paths.call_args.args[0]
-        }
+        configs = hass.http.async_register_static_paths.call_args.args[0]
+        served = {cfg.url_path for cfg in configs}
+        # Browser caching is on (URLs are versioned by file mtime).
+        assert all(cfg.cache_headers is True for cfg in configs)
     else:
-        served = {c.args[0] for c in hass.http.register_static_path.call_args_list}
+        calls = hass.http.register_static_path.call_args_list
+        served = {c.args[0] for c in calls}
+        assert all(c.kwargs.get("cache_headers") is True for c in calls)
     assert registered <= served

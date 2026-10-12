@@ -50,6 +50,9 @@ class ManagedLightRecord:
     dashboard_included: bool = True
     # Room card (PRD Revision §4.6): "half" = two tiles per row, "full" = one.
     tile_width: str = "half"
+    # Scheduler Card wrapper (PRD Revision §4.4): False = left out of the
+    # Area-wide schedule pick list (a single light can still be scheduled).
+    scheduling_included: bool = True
     promoted_switch: bool = False
     # Historical identity, kept so a future replacement workflow (P1,
     # PRD §24) has something to offer the migration onto a new entity.

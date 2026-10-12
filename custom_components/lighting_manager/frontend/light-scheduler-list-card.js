@@ -97,6 +97,7 @@ class LightSchedulerListCard extends HTMLElement {
   set hass(hass) {
     const first = !this._hass;
     this._hass = hass;
+    if (this._schedulerCard) this._schedulerCard.hass = hass;
 
     if (this._isAreaMode()) {
       if (this._fetchedArea !== this.config.area) {
@@ -127,6 +128,7 @@ class LightSchedulerListCard extends HTMLElement {
   }
 
   disconnectedCallback() {
+    this._closeScheduler();
     if (this._refreshTimer) {
       clearInterval(this._refreshTimer);
       this._refreshTimer = null;
@@ -534,64 +536,128 @@ class LightSchedulerListCard extends HTMLElement {
       .length;
   }
 
-  _openScheduler(title, include = null) {
+  // Opens the Scheduler Card in a dialog that Lighting Manager draws itself
+  // (v5.2.0 - replaces the Browser Mod popup, so Browser Mod is no longer
+  // needed). The dialog is attached to Home Assistant's own root element,
+  // next to its dialogs, at a z-index just below them, so the Scheduler
+  // Card's own confirmation dialogs (e.g. delete) still appear on top.
+  async _openScheduler(title, include = null) {
     if (!this._hass) return;
+    this._closeScheduler();
 
-    const entities =
-      include ||
-      this._roomLights();
+    const entities = include || this._roomLights();
+    const heading = title || `${this.config.title || 'Lights'} schedules`;
 
-    this.dispatchEvent(
-      new CustomEvent('ll-custom', {
-        bubbles: true,
-        composed: true,
-        detail: {
-          browser_mod: {
-            service: 'browser_mod.popup',
+    const host =
+      document.querySelector('home-assistant')?.shadowRoot || document.body;
 
-            data: {
-              title:
-                title ||
-                `${this.config.title || 'Lights'} schedules`,
-
-              size: 'wide',
-
-              content: {
-                type: 'custom:scheduler-card',
-
-                title: false,
-
-                include: entities,
-
-                discover_existing: false,
-
-                show_header_toggle: false,
-
-                show_toggle_switches: true,
-
-                show_add_button: true,
-
-                display_options: {
-                  primary_info: [
-                    '{entity}: {action}'
-                  ],
-
-                  secondary_info: [
-                    'days',
-                    'time'
-                  ]
-                },
-
-                sort_by: [
-                  'relative-time',
-                  'state'
-                ]
-              }
-            }
-          }
+    const overlay = document.createElement('div');
+    overlay.className = 'lsl-dialog-overlay';
+    overlay.innerHTML = `
+      <style>
+        .lsl-dialog-overlay {
+          position: fixed; inset: 0; z-index: 7;
+          display: flex; align-items: flex-start; justify-content: center;
+          padding: 5vh 12px 12px; box-sizing: border-box;
+          background: rgba(0, 0, 0, 0.5);
+          overflow-y: auto; -webkit-overflow-scrolling: touch;
         }
-      })
-    );
+        .lsl-dialog {
+          width: 100%; max-width: 640px; box-sizing: border-box;
+          border-radius: 16px; overflow: hidden;
+          background: var(--card-background-color, #fff);
+          color: var(--primary-text-color, #212121);
+          box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+        }
+        .lsl-dialog-head {
+          display: flex; align-items: center; justify-content: space-between;
+          gap: 8px; padding: 12px 8px 4px 16px;
+        }
+        .lsl-dialog-title {
+          font-size: 18px; font-weight: 600;
+          overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+        }
+        .lsl-dialog-close {
+          flex: 0 0 auto; width: 36px; height: 36px; border: 0; border-radius: 50%;
+          background: transparent; color: var(--secondary-text-color, #727272);
+          font-size: 24px; line-height: 1; cursor: pointer;
+        }
+        .lsl-dialog-body { padding: 0 0 8px; }
+        .lsl-dialog-msg { padding: 16px; font-size: 14px; color: var(--secondary-text-color, #727272); }
+      </style>
+      <div class="lsl-dialog" role="dialog" aria-modal="true">
+        <div class="lsl-dialog-head">
+          <div class="lsl-dialog-title"></div>
+          <button class="lsl-dialog-close" aria-label="Close">&times;</button>
+        </div>
+        <div class="lsl-dialog-body">
+          <div class="lsl-dialog-msg">Loading…</div>
+        </div>
+      </div>`;
+    overlay.querySelector('.lsl-dialog-title').textContent = heading;
+
+    overlay.addEventListener('click', e => {
+      if (e.target === overlay) this._closeScheduler();
+    });
+    overlay.querySelector('.lsl-dialog-close').addEventListener('click', () => this._closeScheduler());
+
+    this._onSchedulerKey = e => {
+      if (e.key === 'Escape') this._closeScheduler();
+    };
+    document.addEventListener('keydown', this._onSchedulerKey);
+
+    host.appendChild(overlay);
+    this._schedulerOverlay = overlay;
+
+    const body = overlay.querySelector('.lsl-dialog-body');
+
+    try {
+      const helpers = window.loadCardHelpers ? await window.loadCardHelpers() : null;
+      if (!helpers) throw new Error('Home Assistant card helpers are not available.');
+
+      const card = await helpers.createCardElement({
+        type: 'custom:scheduler-card',
+        title: false,
+        include: entities,
+        discover_existing: false,
+        show_header_toggle: false,
+        show_toggle_switches: true,
+        show_add_button: true,
+        display_options: {
+          primary_info: ['{entity}: {action}'],
+          secondary_info: ['days', 'time']
+        },
+        sort_by: ['relative-time', 'state']
+      });
+
+      // The dialog may have been closed while the card was being created.
+      if (this._schedulerOverlay !== overlay) return;
+
+      card.hass = this._hass;
+      body.innerHTML = '';
+      body.appendChild(card);
+      this._schedulerCard = card;
+    } catch (err) {
+      if (this._schedulerOverlay !== overlay) return;
+      body.innerHTML = '';
+      const msg = document.createElement('div');
+      msg.className = 'lsl-dialog-msg';
+      msg.style.color = 'var(--error-color)';
+      msg.textContent = `Could not open the Scheduler Card - is it installed? (${err?.message || err})`;
+      body.appendChild(msg);
+    }
+  }
+
+  _closeScheduler() {
+    if (this._onSchedulerKey) {
+      document.removeEventListener('keydown', this._onSchedulerKey);
+      this._onSchedulerKey = null;
+    }
+    if (this._schedulerOverlay) {
+      this._schedulerOverlay.remove();
+      this._schedulerOverlay = null;
+    }
+    this._schedulerCard = null;
   }
 
   _render() {
@@ -1898,7 +1964,7 @@ if (
 }
 
 console.info(
-  '%c LIGHT-SCHEDULER-LIST-CARD %c v5.1.0 ',
+  '%c LIGHT-SCHEDULER-LIST-CARD %c v5.2.0 ',
   'color: white; background: #03a9f4; font-weight: 700;',
   'color: #03a9f4; background: white; font-weight: 700;'
 );

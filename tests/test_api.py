@@ -376,3 +376,39 @@ async def test_set_tile_width_rejected_for_non_admin(
     response = await client.receive_json()
     assert response["success"] is False
     assert response["error"]["code"] == "unauthorized"
+
+
+async def test_scheduling_included_defaults_true_and_can_be_excluded(
+    api_hass: HomeAssistant, hass_ws_client
+) -> None:
+    api_hass.states.async_set("light.spots", "off")
+    client = await hass_ws_client(api_hass)
+
+    await client.send_json_auto_id({"type": f"{DOMAIN}/adopt_light", "entity_id": "light.spots"})
+    assert (await client.receive_json())["success"] is True
+
+    await client.send_json_auto_id({"type": f"{DOMAIN}/list_lights"})
+    lights = (await client.receive_json())["result"]["lights"]
+    assert next(l for l in lights if l["entity_id"] == "light.spots")["scheduling_included"] is True
+
+    await client.send_json_auto_id(
+        {"type": f"{DOMAIN}/set_scheduling_included", "entity_id": "light.spots", "included": False}
+    )
+    assert (await client.receive_json())["success"] is True
+
+    await client.send_json_auto_id({"type": f"{DOMAIN}/list_lights"})
+    lights = (await client.receive_json())["result"]["lights"]
+    assert next(l for l in lights if l["entity_id"] == "light.spots")["scheduling_included"] is False
+
+
+async def test_set_scheduling_included_rejected_for_non_admin(
+    api_hass: HomeAssistant, hass_ws_client, hass_read_only_access_token
+) -> None:
+    client = await hass_ws_client(api_hass, hass_read_only_access_token)
+
+    await client.send_json_auto_id(
+        {"type": f"{DOMAIN}/set_scheduling_included", "entity_id": "light.spots", "included": False}
+    )
+    response = await client.receive_json()
+    assert response["success"] is False
+    assert response["error"]["code"] == "unauthorized"
