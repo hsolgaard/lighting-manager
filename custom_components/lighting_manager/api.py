@@ -25,6 +25,9 @@ from .const import DOMAIN
 from .coordinator import LightingManagerCoordinator
 
 
+_LIGHT_OR_SWITCH = vol.All(str, vol.Match(r"^(light|switch)\.[a-z0-9_]+$"))
+
+
 def async_register_websocket_commands(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_list_lights)
     websocket_api.async_register_command(hass, ws_list_area_lights)
@@ -216,12 +219,16 @@ async def ws_promote_switch(hass: HomeAssistant, connection, msg) -> None:
     connection.send_result(msg["id"])
 
 
-@websocket_api.require_admin
+# Deliberately NOT admin-gated (unlike the registry-modifying commands above):
+# starting/cancelling a countdown is the same class of action as switching a
+# light, which any dashboard user can already do, and the countdown card is
+# used on the family's everyday dashboard. Restricted to light/switch
+# entities so it cannot be pointed at anything else.
 @websocket_api.websocket_command(
     {
         vol.Required("type"): f"{DOMAIN}/start_countdown",
-        vol.Required("entity_id"): str,
-        vol.Required("minutes"): vol.Coerce(float),
+        vol.Required("entity_id"): _LIGHT_OR_SWITCH,
+        vol.Required("minutes"): vol.All(vol.Coerce(float), vol.Range(min=0, max=1440)),
         vol.Optional("turn_on_first", default=True): bool,
     }
 )
@@ -233,9 +240,8 @@ async def ws_start_countdown(hass: HomeAssistant, connection, msg) -> None:
     connection.send_result(msg["id"])
 
 
-@websocket_api.require_admin
 @websocket_api.websocket_command(
-    {vol.Required("type"): f"{DOMAIN}/cancel_countdown", vol.Required("entity_id"): str}
+    {vol.Required("type"): f"{DOMAIN}/cancel_countdown", vol.Required("entity_id"): _LIGHT_OR_SWITCH}
 )
 @websocket_api.async_response
 async def ws_cancel_countdown(hass: HomeAssistant, connection, msg) -> None:

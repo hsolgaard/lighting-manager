@@ -284,3 +284,42 @@ async def test_read_only_command_allowed_for_non_admin(
     response = await client.receive_json()
 
     assert response["success"] is True
+
+
+async def test_countdown_start_and_cancel_allowed_for_non_admin(
+    api_hass: HomeAssistant, hass_ws_client, hass_read_only_access_token
+) -> None:
+    """The countdown card is used by the whole household, not just admins."""
+
+    async def _turn_on(call):
+        api_hass.states.async_set(call.data["entity_id"], "on")
+
+    async def _turn_off(call):
+        api_hass.states.async_set(call.data["entity_id"], "off")
+
+    api_hass.services.async_register("light", "turn_on", _turn_on)
+    api_hass.services.async_register("light", "turn_off", _turn_off)
+    api_hass.states.async_set("light.office_spots", "off")
+
+    client = await hass_ws_client(api_hass, hass_read_only_access_token)
+    await client.send_json_auto_id(
+        {"type": f"{DOMAIN}/start_countdown", "entity_id": "light.office_spots", "minutes": 5}
+    )
+    assert (await client.receive_json())["success"] is True
+
+    await client.send_json_auto_id(
+        {"type": f"{DOMAIN}/cancel_countdown", "entity_id": "light.office_spots"}
+    )
+    assert (await client.receive_json())["success"] is True
+
+
+async def test_countdown_rejects_non_light_or_switch_entity(
+    api_hass: HomeAssistant, hass_ws_client
+) -> None:
+    client = await hass_ws_client(api_hass)
+    await client.send_json_auto_id(
+        {"type": f"{DOMAIN}/start_countdown", "entity_id": "lock.front_door", "minutes": 5}
+    )
+    response = await client.receive_json()
+
+    assert response["success"] is False
