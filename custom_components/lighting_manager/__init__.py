@@ -84,6 +84,14 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     return True
 
 
+def _file_version(path: str) -> int:
+    """File modification time, used as a cache-busting URL version."""
+    try:
+        return int(os.path.getmtime(path))
+    except OSError:
+        return 0
+
+
 async def _async_register_panel(hass: HomeAssistant) -> None:
     """Register the frontend panel (PRD §28 frontend/lighting-manager-panel.js).
 
@@ -123,7 +131,7 @@ async def _async_register_panel(hass: HomeAssistant) -> None:
         hass,
         webcomponent_name="lighting-manager-panel",
         frontend_url_path=PANEL_URL,
-        module_url=PANEL_JS_MODULE,
+        module_url=f"{PANEL_JS_MODULE}?v={_file_version(static_path)}",
         sidebar_title="Lighting",
         sidebar_icon="mdi:lightbulb-group",
         require_admin=False,
@@ -139,8 +147,4 @@ async def _async_register_panel(hass: HomeAssistant) -> None:
     # otherwise keep running a cached copy of a script whose URL has not
     # changed. Takes effect after a Home Assistant restart.
     for url, path in card_paths.items():
-        try:
-            version = int(os.path.getmtime(path))
-        except OSError:
-            version = 0
-        frontend.add_extra_js_url(hass, f"{url}?v={version}")
+        frontend.add_extra_js_url(hass, f"{url}?v={_file_version(path)}")
