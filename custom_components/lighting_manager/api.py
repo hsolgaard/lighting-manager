@@ -42,6 +42,7 @@ def async_register_websocket_commands(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_set_light_type)
     websocket_api.async_register_command(hass, ws_set_dashboard_included)
     websocket_api.async_register_command(hass, ws_set_tile_width)
+    websocket_api.async_register_command(hass, ws_set_brightness_slider)
     websocket_api.async_register_command(hass, ws_set_scheduling_included)
     websocket_api.async_register_command(hass, ws_promote_switch)
     websocket_api.async_register_command(hass, ws_start_countdown)
@@ -223,6 +224,20 @@ async def ws_set_dashboard_included(hass: HomeAssistant, connection, msg) -> Non
 @websocket_api.async_response
 async def ws_set_scheduling_included(hass: HomeAssistant, connection, msg) -> None:
     await _coordinator(hass).async_set_scheduling_included(msg["entity_id"], msg["included"])
+    connection.send_result(msg["id"])
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): f"{DOMAIN}/set_brightness_slider",
+        vol.Required("entity_id"): str,
+        vol.Required("enabled"): bool,
+    }
+)
+@websocket_api.async_response
+async def ws_set_brightness_slider(hass: HomeAssistant, connection, msg) -> None:
+    await _coordinator(hass).async_set_brightness_slider(msg["entity_id"], msg["enabled"])
     connection.send_result(msg["id"])
 
 

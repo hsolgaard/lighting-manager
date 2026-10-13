@@ -13,7 +13,7 @@
 try {
 {
 /**
- * Lighting Manager countdown card  v2.1.0
+ * Lighting Manager countdown card  v2.1.1
  * (PRD Revision - Lighting-Aware Dashboard Automation, section 4.3.)
  *
  * One light per card. It is Home Assistant's own tile card, so it looks
@@ -337,9 +337,13 @@ class LightingManagerCountdownCard extends HTMLElement {
       badge.className = 'lm-cd-badge';
       badge.setAttribute('aria-label', 'Countdown running');
       badge.style.cssText =
-        // Bottom-right, level with the tile's state line ("On"/"Off"), so it
-        // never covers the light's name on the line above.
-        'position:absolute;bottom:5px;right:10px;' +
+        // Right-hand side, level with the tile's state line ("On"/"Off"), so it
+        // never covers the light's name on the line above. A tile with a
+        // feature row (the brightness slider) is taller, so measure from the
+        // top there; otherwise from the bottom.
+        (this.config?.features?.length
+          ? 'position:absolute;top:30px;right:10px;'
+          : 'position:absolute;bottom:5px;right:10px;') +
         'display:flex;align-items:center;gap:2px;padding:1px 7px 1px 5px;' +
         'border-radius:11px;font-size:11.5px;font-weight:600;line-height:18px;' +
         'font-variant-numeric:tabular-nums;pointer-events:none;z-index:1;' +
@@ -619,7 +623,7 @@ if (!window.customCards.some(x => x.type === 'lighting-manager-countdown-card'))
 }
 
 console.info(
-  '%c LIGHTING-MANAGER-COUNTDOWN-CARD %c v2.1.0 ',
+  '%c LIGHTING-MANAGER-COUNTDOWN-CARD %c v2.1.1 ',
   'color: white; background: #03a9f4; font-weight: 700;',
   'color: #03a9f4; background: white; font-weight: 700;'
 );
@@ -2837,7 +2841,7 @@ console.info(
 try {
 {
 /**
- * Lighting Manager Room Card  v1.0.0
+ * Lighting Manager Room Card  v1.1.0
  * (PRD Revision - Lighting-Aware Dashboard Automation, section 4.6.)
  *
  * Drop this into any dashboard, in any view, next to any other cards:
@@ -2855,6 +2859,7 @@ try {
  *   - Include on dashboard  (off = the light is not drawn here)
  *   - Name                  (the light's Home Assistant name)
  *   - Tile width            (half = two per row, full = one per row)
+ *   - Brightness slider     (a slider under the tile; off by default)
  *   - Order                 (the manual order, else alphabetical)
  *
  * Optional: `columns: 3` (default 2) for a wider grid.
@@ -2976,7 +2981,11 @@ class LightingManagerRoomCard extends HTMLElement {
       if (token !== this._fetchToken) return;
       this._lights = (result.lights || [])
         .filter(l => l.dashboard_included !== false)
-        .map(l => ({ entity_id: l.entity_id, width: l.tile_width === 'full' ? 'full' : 'half' }));
+        .map(l => ({
+          entity_id: l.entity_id,
+          width: l.tile_width === 'full' ? 'full' : 'half',
+          slider: l.brightness_slider === true
+        }));
       this._error = null;
     } catch (err) {
       if (token !== this._fetchToken) return;
@@ -3020,7 +3029,7 @@ class LightingManagerRoomCard extends HTMLElement {
     // count change - not on every refresh tick - so an open countdown
     // popup or a mid-tap tile is never torn down by the poll.
     const key =
-      this.config.columns + '|' + this._lights.map(l => `${l.entity_id}:${l.width}`).join(',');
+      this.config.columns + '|' + this._lights.map(l => `${l.entity_id}:${l.width}:${l.slider ? 's' : ''}`).join(',');
     if (this._renderedKey === key) return;
 
     const token = ++this._renderToken;
@@ -3051,7 +3060,14 @@ class LightingManagerRoomCard extends HTMLElement {
       cell.style.cssText = light.width === 'full' ? 'grid-column:1 / -1;min-width:0;' : 'min-width:0;';
 
       const tile = document.createElement('lighting-manager-countdown-card');
-      tile.setConfig({ type: 'custom:lighting-manager-countdown-card', entity: light.entity_id });
+      const tileConfig = { type: 'custom:lighting-manager-countdown-card', entity: light.entity_id };
+      if (light.slider) {
+        // Home Assistant's own brightness slider, under the tile. It only
+        // appears for lights that can dim.
+        tileConfig.features = [{ type: 'light-brightness' }];
+        tileConfig.features_position = 'bottom';
+      }
+      tile.setConfig(tileConfig);
       if (this._hass) tile.hass = this._hass;
 
       cell.appendChild(tile);
@@ -3081,7 +3097,7 @@ if (!window.customCards.some(x => x.type === 'lighting-manager-room-card')) {
 }
 
 console.info(
-  '%c LIGHTING-MANAGER-ROOM-CARD %c v1.0.0 ',
+  '%c LIGHTING-MANAGER-ROOM-CARD %c v1.1.0 ',
   'color: white; background: #03a9f4; font-weight: 700;',
   'color: #03a9f4; background: white; font-weight: 700;'
 );

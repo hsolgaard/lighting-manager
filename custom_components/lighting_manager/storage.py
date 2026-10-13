@@ -50,6 +50,9 @@ class ManagedLightRecord:
     dashboard_included: bool = True
     # Room card (PRD Revision §4.6): "half" = two tiles per row, "full" = one.
     tile_width: str = "half"
+    # Room card: draw Home Assistant's brightness slider under the tile
+    # (off by default - most lights are plain on/off tiles).
+    brightness_slider: bool = False
     # Scheduler Card wrapper (PRD Revision §4.4): False = left out of the
     # Area-wide schedule pick list (a single light can still be scheduled).
     scheduling_included: bool = True

@@ -51,6 +51,7 @@ class LightView:
     light_type: str | None
     dashboard_included: bool
     tile_width: str
+    brightness_slider: bool
     scheduling_included: bool
     schedule_count: int
     countdown_remaining_seconds: int | None
@@ -207,6 +208,7 @@ class LightingManagerCoordinator:
             light_type=registry.get_light_type(self.hass, entity_id),
             dashboard_included=record.dashboard_included,
             tile_width=record.tile_width,
+            brightness_slider=record.brightness_slider,
             scheduling_included=record.scheduling_included,
             schedule_count=schedule_count,
             countdown_remaining_seconds=self.countdown.remaining_seconds(entity_id),
@@ -329,6 +331,12 @@ class LightingManagerCoordinator:
         key = registry.stable_key_for_entity(self.hass, entity_id)
         record = self.store.get_light(key)
         record.scheduling_included = included
+        await self.store.async_set_light(key, record)
+
+    async def async_set_brightness_slider(self, entity_id: str, enabled: bool) -> None:
+        key = registry.stable_key_for_entity(self.hass, entity_id)
+        record = self.store.get_light(key)
+        record.brightness_slider = enabled
         await self.store.async_set_light(key, record)
 
     async def async_set_tile_width(self, entity_id: str, width: str) -> None:

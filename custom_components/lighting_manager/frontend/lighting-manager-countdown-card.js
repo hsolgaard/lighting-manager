@@ -1,5 +1,5 @@
 /**
- * Lighting Manager countdown card  v2.1.0
+ * Lighting Manager countdown card  v2.1.1
  * (PRD Revision - Lighting-Aware Dashboard Automation, section 4.3.)
  *
  * One light per card. It is Home Assistant's own tile card, so it looks
@@ -323,9 +323,13 @@ class LightingManagerCountdownCard extends HTMLElement {
       badge.className = 'lm-cd-badge';
       badge.setAttribute('aria-label', 'Countdown running');
       badge.style.cssText =
-        // Bottom-right, level with the tile's state line ("On"/"Off"), so it
-        // never covers the light's name on the line above.
-        'position:absolute;bottom:5px;right:10px;' +
+        // Right-hand side, level with the tile's state line ("On"/"Off"), so it
+        // never covers the light's name on the line above. A tile with a
+        // feature row (the brightness slider) is taller, so measure from the
+        // top there; otherwise from the bottom.
+        (this.config?.features?.length
+          ? 'position:absolute;top:30px;right:10px;'
+          : 'position:absolute;bottom:5px;right:10px;') +
         'display:flex;align-items:center;gap:2px;padding:1px 7px 1px 5px;' +
         'border-radius:11px;font-size:11.5px;font-weight:600;line-height:18px;' +
         'font-variant-numeric:tabular-nums;pointer-events:none;z-index:1;' +
@@ -605,7 +609,7 @@ if (!window.customCards.some(x => x.type === 'lighting-manager-countdown-card'))
 }
 
 console.info(
-  '%c LIGHTING-MANAGER-COUNTDOWN-CARD %c v2.1.0 ',
+  '%c LIGHTING-MANAGER-COUNTDOWN-CARD %c v2.1.1 ',
   'color: white; background: #03a9f4; font-weight: 700;',
   'color: #03a9f4; background: white; font-weight: 700;'
 );

@@ -113,6 +113,7 @@ const ACTION_SUCCESS_MESSAGES = {
   set_light_type: "Type updated",
   set_dashboard_included: "Dashboard setting updated",
   set_tile_width: "Tile width updated",
+  set_brightness_slider: "Brightness slider setting updated",
   set_scheduling_included: "Scheduling setting updated",
   start_countdown: "Countdown started",
   cancel_countdown: "Countdown cancelled",
@@ -1501,6 +1502,25 @@ class LightingManagerPanel extends HTMLElement {
       }
     );
     this._detailEl.appendChild(widthField.row);
+
+    // -- Brightness slider (room card) --
+    const sliderRow = document.createElement("div");
+    sliderRow.className = "lm-checkbox-row lm-field";
+    const sliderCheckbox = document.createElement("input");
+    sliderCheckbox.type = "checkbox";
+    sliderCheckbox.id = "lm-brightness-slider";
+    sliderCheckbox.checked = light.brightness_slider === true;
+    sliderCheckbox.addEventListener("change", async () => {
+      await this._callAction("set_brightness_slider", {
+        entity_id: light.entity_id,
+        enabled: sliderCheckbox.checked,
+      });
+    });
+    const sliderLabel = document.createElement("label");
+    sliderLabel.htmlFor = "lm-brightness-slider";
+    sliderLabel.textContent = "Show brightness slider on dashboard";
+    sliderRow.append(sliderCheckbox, sliderLabel);
+    this._detailEl.appendChild(sliderRow);
 
     // -- Countdown --
     const countdownTitle = document.createElement("div");

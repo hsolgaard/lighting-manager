@@ -445,3 +445,37 @@ async def test_list_countdowns_returns_running_countdowns(
 
     coordinator: LightingManagerCoordinator = api_hass.data[DOMAIN]["coordinator"]
     await coordinator.countdown.async_cancel("light.office_spots")
+
+
+async def test_brightness_slider_defaults_off_and_can_be_enabled(
+    api_hass: HomeAssistant, hass_ws_client
+) -> None:
+    api_hass.states.async_set("light.spots", "off")
+    client = await hass_ws_client(api_hass)
+
+    await client.send_json_auto_id({"type": f"{DOMAIN}/list_lights"})
+    lights = (await client.receive_json())["result"]["lights"]
+    assert next(l for l in lights if l["entity_id"] == "light.spots")["brightness_slider"] is False
+
+    await client.send_json_auto_id(
+        {"type": f"{DOMAIN}/set_brightness_slider", "entity_id": "light.spots", "enabled": True}
+    )
+    assert (await client.receive_json())["success"] is True
+
+    await client.send_json_auto_id({"type": f"{DOMAIN}/list_lights"})
+    lights = (await client.receive_json())["result"]["lights"]
+    assert next(l for l in lights if l["entity_id"] == "light.spots")["brightness_slider"] is True
+
+
+async def test_set_brightness_slider_rejected_for_non_admin(
+    api_hass: HomeAssistant, hass_ws_client, hass_read_only_access_token
+) -> None:
+    client = await hass_ws_client(api_hass, hass_read_only_access_token)
+
+    await client.send_json_auto_id(
+        {"type": f"{DOMAIN}/set_brightness_slider", "entity_id": "light.spots", "enabled": True}
+    )
+    response = await client.receive_json()
+    assert response["success"] is False
+    assert response["error"]["code"] == "unauthorized"
+
