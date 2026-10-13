@@ -45,6 +45,7 @@ CARD_FILES = (
     "light-scheduler-list-card.js",
     "lighting-manager-scheduler-card.js",
     "lighting-manager-room-card.js",
+    "lighting-manager-overview-card.js",
 )
 STATIC_URL_PREFIX = "/lighting_manager_static"
 PANEL_JS_MODULE = f"{STATIC_URL_PREFIX}/{PANEL_URL}.js"

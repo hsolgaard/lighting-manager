@@ -88,6 +88,14 @@ Two cards ship with the integration and are loaded globally via
   the Area as a countdown tile, using each light's Lighting Manager
   settings (name, order, tile width half/full). Nothing to maintain: add
   or hide a light in Lighting Manager and the card follows.
+- `custom:lighting-manager-overview-card` - no required options (optional
+  `title`, `columns`, `show_schedules: false`). A whole lighting page from
+  one card: "On now" (every light that is on, with its room, and Turn all
+  off), then one section per room with that room's on/off buttons; sections
+  fold away (remembered on the device). Shows every adopted light, whatever
+  its "Include on dashboard" tick; tiles are the countdown tiles, with the
+  light's tile width and brightness slider. A clock on each tile shows the
+  number of schedules and opens that light's schedule dialog.
 - `custom:light-scheduler-list-card` - `area: <area_id>` (Lighting Manager
   resolves the adopted lights, manual order) or the legacy `lights:` list.
   Still uses Niels Faber's Scheduler component for the schedules
