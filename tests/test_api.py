@@ -412,3 +412,36 @@ async def test_set_scheduling_included_rejected_for_non_admin(
     response = await client.receive_json()
     assert response["success"] is False
     assert response["error"]["code"] == "unauthorized"
+
+
+async def test_list_countdowns_returns_running_countdowns(
+    api_hass: HomeAssistant, hass_ws_client
+) -> None:
+    async def _turn_on(call):
+        api_hass.states.async_set(call.data["entity_id"], "on")
+
+    async def _turn_off(call):
+        api_hass.states.async_set(call.data["entity_id"], "off")
+
+    api_hass.services.async_register("light", "turn_on", _turn_on)
+    api_hass.services.async_register("light", "turn_off", _turn_off)
+    api_hass.states.async_set("light.office_spots", "off")
+
+    client = await hass_ws_client(api_hass)
+
+    await client.send_json_auto_id({"type": f"{DOMAIN}/list_countdowns"})
+    response = await client.receive_json()
+    assert response["success"] is True
+    assert response["result"] == {"countdowns": {}}
+
+    await client.send_json_auto_id(
+        {"type": f"{DOMAIN}/start_countdown", "entity_id": "light.office_spots", "minutes": 5}
+    )
+    assert (await client.receive_json())["success"] is True
+
+    await client.send_json_auto_id({"type": f"{DOMAIN}/list_countdowns"})
+    response = await client.receive_json()
+    assert list(response["result"]["countdowns"]) == ["light.office_spots"]
+
+    coordinator: LightingManagerCoordinator = api_hass.data[DOMAIN]["coordinator"]
+    await coordinator.countdown.async_cancel("light.office_spots")

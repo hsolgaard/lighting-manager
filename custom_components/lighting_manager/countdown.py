@@ -11,10 +11,13 @@ original Simple Timer adapter. Key properties, each tied to a PRD bullet:
 - "On startup, restore future countdowns; if a countdown expired while
   Home Assistant was offline and the light is still on, apply the
   pending turn-off immediately" -> async_restore_all().
-- External-action-cancels-countdown decision (2026-09, recorded in the
-  Feasibility Review): any state change on the target entity that this
-  manager didn't itself cause cancels the pending countdown, via
-  async_track_state_change_event in async_start().
+- External-action-cancels-countdown decision, narrowed 2026-10 (PRD
+  §5, option B): the countdown is cancelled only when something other
+  than this manager switches the light OFF (or removes the entity).
+  Attribute reports (brightness, colour - a Zigbee light sends these
+  moments after turning on), and unavailable/unknown blips, no longer
+  cancel it. The original rule - any state change cancels - was found in
+  UAT to end a countdown a second or two after it started.
 - "Do not create one Home Assistant timer helper per light" -> this
   class uses hass's own event-loop scheduling (async_call_later)
   directly; there is no per-light helper entity at all.
@@ -35,6 +38,14 @@ from homeassistant.util import dt as dt_util
 from .storage import CountdownRecord, LightingManagerStore
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def _service_domain(entity_id: str) -> str:
+    """Domain to call turn_on/turn_off on: the entity's own for a promoted
+    switch, `light` otherwise (calling light.* on a switch.* entity does
+    nothing)."""
+    domain = entity_id.split(".", 1)[0]
+    return domain if domain in ("light", "switch") else "light"
 
 
 @dataclass
@@ -111,6 +122,17 @@ class CountdownManager:
     def is_active(self, entity_id: str) -> bool:
         return entity_id in self._active
 
+    def active_expiries(self) -> dict[str, str]:
+        """Every running countdown as {entity_id: absolute expiry ISO}.
+
+        Cheap to call, so dashboard tiles can poll one small answer instead
+        of the whole light list.
+        """
+        return {
+            entity_id: active.expires_at.isoformat()
+            for entity_id, active in self._active.items()
+        }
+
     async def async_start(
         self, entity_id: str, minutes: float, *, turn_on_first: bool = True
     ) -> None:
@@ -135,7 +157,7 @@ class CountdownManager:
             self._self_caused.add(entity_id)
             try:
                 await self._hass.services.async_call(
-                    "light",
+                    _service_domain(entity_id),
                     "turn_on",
                     {"entity_id": entity_id},
                     blocking=True,
@@ -175,8 +197,14 @@ class CountdownManager:
         def _on_external_state_change(event: Event) -> None:
             if entity_id in self._self_caused:
                 return
+            new_state = event.data.get("new_state")
+            if new_state is not None and new_state.state != "off":
+                # Brightness/colour reports, unavailable/unknown blips and
+                # similar do not end a countdown.
+                return
             _LOGGER.debug(
-                "External state change on %s cancelled its active countdown",
+                "%s was switched off (or removed) by something else; "
+                "cancelling its active countdown",
                 entity_id,
             )
             self._hass.async_create_task(self._async_cancel_internal(entity_id, persist=True))
@@ -203,10 +231,14 @@ class CountdownManager:
             active.unsub_state_listener()
         await self._store.async_clear_countdown(entity_id)
 
+        state = self._hass.states.get(entity_id)
+        if state is None or state.state == "off":
+            return
+
         self._self_caused.add(entity_id)
         try:
             await self._hass.services.async_call(
-                "light",
+                _service_domain(entity_id),
                 "turn_off",
                 {"entity_id": entity_id},
                 blocking=True,

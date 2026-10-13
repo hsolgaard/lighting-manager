@@ -97,7 +97,9 @@ Two cards ship with the integration and are loaded globally via
 - `custom:lighting-manager-countdown-card` - `entity: light.x`; a native
   Home Assistant tile (same look as every other tile; any tile option such
   as `name` or `icon` is passed through). Tap toggles; double-tap opens a
-  countdown popup.
+  countdown popup (setup, or - when one is running - the live clock with
+  Change / Cancel countdown / OK). A running countdown also shows a small
+  timer badge on the tile.
 - `custom:lighting-manager-room-card` - `area: living_room` (id or name);
   optional `columns: 2`. Draws every adopted, shown-on-dashboard light in
   the Area as a countdown tile, using each light's Lighting Manager

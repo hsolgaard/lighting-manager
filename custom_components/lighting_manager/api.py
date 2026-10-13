@@ -46,6 +46,7 @@ def async_register_websocket_commands(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_promote_switch)
     websocket_api.async_register_command(hass, ws_start_countdown)
     websocket_api.async_register_command(hass, ws_cancel_countdown)
+    websocket_api.async_register_command(hass, ws_list_countdowns)
 
 
 def _coordinator(hass: HomeAssistant) -> LightingManagerCoordinator:
@@ -277,3 +278,13 @@ async def ws_start_countdown(hass: HomeAssistant, connection, msg) -> None:
 async def ws_cancel_countdown(hass: HomeAssistant, connection, msg) -> None:
     await _coordinator(hass).countdown.async_cancel(msg["entity_id"])
     connection.send_result(msg["id"])
+
+
+@callback
+@websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/list_countdowns"})
+def ws_list_countdowns(hass: HomeAssistant, connection, msg) -> None:
+    """Running countdowns as {entity_id: expiry}. Not admin-gated: every
+    dashboard tile shows its own light's remaining time."""
+    connection.send_result(
+        msg["id"], {"countdowns": _coordinator(hass).countdown.active_expiries()}
+    )

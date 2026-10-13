@@ -247,3 +247,111 @@ async def test_remaining_seconds_none_when_not_active(
 ) -> None:
     assert manager.remaining_seconds(ENTITY_ID) is None
     assert manager.is_active(ENTITY_ID) is False
+
+
+async def test_attribute_change_does_not_cancel_countdown(
+    hass: HomeAssistant,
+    manager: CountdownManager,
+    light_services: list[str],
+) -> None:
+    """A Zigbee light reports brightness/colour moments after turning on.
+
+    Found in UAT: under the original "any change cancels" rule that report
+    ended the countdown a second after it started (PRD section 5, option B).
+    """
+    await manager.async_start(ENTITY_ID, minutes=5)
+
+    hass.states.async_set(ENTITY_ID, "on", {"brightness": 200})
+    await hass.async_block_till_done()
+    hass.states.async_set(ENTITY_ID, "on", {"brightness": 120, "color_temp": 300})
+    await hass.async_block_till_done()
+
+    assert manager.is_active(ENTITY_ID)
+
+
+async def test_unavailable_blip_does_not_cancel_countdown(
+    hass: HomeAssistant,
+    manager: CountdownManager,
+    light_services: list[str],
+) -> None:
+    await manager.async_start(ENTITY_ID, minutes=5)
+
+    hass.states.async_set(ENTITY_ID, "unavailable")
+    await hass.async_block_till_done()
+    hass.states.async_set(ENTITY_ID, "on")
+    await hass.async_block_till_done()
+
+    assert manager.is_active(ENTITY_ID)
+
+
+async def test_removed_entity_cancels_countdown(
+    hass: HomeAssistant,
+    manager: CountdownManager,
+    light_services: list[str],
+) -> None:
+    await manager.async_start(ENTITY_ID, minutes=5)
+
+    hass.states.async_remove(ENTITY_ID)
+    await hass.async_block_till_done()
+
+    assert not manager.is_active(ENTITY_ID)
+
+
+async def test_active_expiries_lists_running_countdowns(
+    hass: HomeAssistant,
+    manager: CountdownManager,
+    light_services: list[str],
+) -> None:
+    assert manager.active_expiries() == {}
+
+    await manager.async_start(ENTITY_ID, minutes=5)
+
+    expiries = manager.active_expiries()
+    assert list(expiries) == [ENTITY_ID]
+    assert expiries[ENTITY_ID] == manager.expires_at_iso(ENTITY_ID)
+
+
+async def test_expiry_skips_turn_off_when_light_already_off(
+    hass: HomeAssistant,
+    manager: CountdownManager,
+    light_services: list[str],
+) -> None:
+    await manager.async_start(ENTITY_ID, minutes=5)
+    # Bypass the listener (as a restore after restart effectively does).
+    hass.states.async_set(ENTITY_ID, "off")
+    light_services.clear()
+
+    await manager._async_apply_expiry(ENTITY_ID)
+
+    assert f"turn_off:{ENTITY_ID}" not in light_services
+
+
+async def test_countdown_on_promoted_switch_uses_switch_domain(
+    hass: HomeAssistant,
+    manager: CountdownManager,
+    freezer,
+) -> None:
+    """Promoted lamp switches (switch.*) must be driven with switch.turn_*."""
+    calls: list[str] = []
+
+    async def _on(call):
+        calls.append(f"switch.turn_on:{call.data['entity_id']}")
+        hass.states.async_set(call.data["entity_id"], "on")
+
+    async def _off(call):
+        calls.append(f"switch.turn_off:{call.data['entity_id']}")
+        hass.states.async_set(call.data["entity_id"], "off")
+
+    hass.services.async_register("switch", "turn_on", _on)
+    hass.services.async_register("switch", "turn_off", _off)
+    hass.states.async_set("switch.lamp", "off")
+
+    await manager.async_start("switch.lamp", minutes=1)
+    assert calls == ["switch.turn_on:switch.lamp"]
+
+    freezer.tick(timedelta(minutes=1, seconds=1))
+    async_fire_time_changed(hass)
+    await hass.async_block_till_done()
+
+    assert calls == ["switch.turn_on:switch.lamp", "switch.turn_off:switch.lamp"]
+    assert hass.states.get("switch.lamp").state == "off"
