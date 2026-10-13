@@ -255,3 +255,27 @@ async def test_set_light_type_rejects_unknown_type(hass: HomeAssistant) -> None:
         pass
     else:
         raise AssertionError("Expected ValueError for an unknown light type")
+
+
+async def test_device_id_for_entity_on_a_device(
+    hass: HomeAssistant, config_entry_id: str
+) -> None:
+    device_registry = dr.async_get(hass)
+    entity_registry = er.async_get(hass)
+    device = device_registry.async_get_or_create(
+        config_entry_id=config_entry_id,
+        identifiers={("fake_platform", "device-link")},
+    )
+    entry = entity_registry.async_get_or_create(
+        "light", "test_platform", "unique-link", device_id=device.id
+    )
+
+    assert registry.async_get_device_id(hass, entry.entity_id) == device.id
+
+
+async def test_device_id_is_none_without_a_device(hass: HomeAssistant) -> None:
+    entity_registry = er.async_get(hass)
+    entry = entity_registry.async_get_or_create("light", "test_platform", "no-device")
+
+    assert registry.async_get_device_id(hass, entry.entity_id) is None
+    assert registry.async_get_device_id(hass, "light.not_in_registry") is None

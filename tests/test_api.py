@@ -478,4 +478,3 @@ async def test_set_brightness_slider_rejected_for_non_admin(
     response = await client.receive_json()
     assert response["success"] is False
     assert response["error"]["code"] == "unauthorized"
-
