@@ -56,8 +56,8 @@ PANEL_JS_MODULE = f"{STATIC_URL_PREFIX}/{PANEL_URL}.js"
 # component lives in the card bundle.
 # (url path, element, sidebar title, sidebar icon)
 EXTRA_PAGES = (
-    ("lighting-manager-lights", "lighting-manager-lights-page", "Lights", "mdi:lightbulb-group-outline"),
-    ("lighting-manager-schedules", "lighting-manager-schedules-page", "Light Schedules", "mdi:calendar-clock"),
+    ("lighting-manager-lights", "lighting-manager-lights-page", "Lights (Lighting Manager)", "mdi:lightbulb-group-outline"),
+    ("lighting-manager-schedules", "lighting-manager-schedules-page", "Schedules (Lighting Manager)", "mdi:calendar-clock"),
 )
 
 

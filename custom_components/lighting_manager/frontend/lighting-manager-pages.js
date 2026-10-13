@@ -8,7 +8,7 @@
  *   Lights           the whole house: what is on now, every light by room,
  *                    with a folded Schedules row under each room.
  *                    (The overview card, full page.)
- *   Light Schedules  one schedule list per room, for everyone in the house.
+ *   Schedules        one schedule list per room, for everyone in the house.
  *                    (The area-aware light scheduler card, once per room.)
  *
  * Both follow Lighting Manager: adopt a light or give a room a new light
@@ -65,6 +65,11 @@ class LightingManagerPageBase extends HTMLElement {
     const title = document.createElement('div');
     title.textContent = this.pageTitle;
     title.style.cssText = 'font-size:20px;font-weight:500;';
+    // Say where the page comes from, matching its sidebar entry.
+    const origin = document.createElement('span');
+    origin.textContent = ' · Lighting Manager';
+    origin.style.cssText = 'font-size:14px;font-weight:400;opacity:0.75;';
+    title.appendChild(origin);
     bar.appendChild(title);
     this.appendChild(bar);
 
@@ -113,7 +118,7 @@ class LightingManagerSchedulesPage extends LightingManagerPageBase {
   }
 
   get pageTitle() {
-    return 'Light Schedules';
+    return 'Schedules';
   }
 
   connectedCallback() {
