@@ -3259,7 +3259,7 @@ console.info(
 try {
 {
 /**
- * Lighting Manager Overview Card  v1.1.0
+ * Lighting Manager Overview Card  v1.2.0
  * (PRD Revision - Lighting-Aware Dashboard Automation, section 4.8.)
  *
  * One card, a whole lighting page:
@@ -3274,21 +3274,18 @@ try {
  *   - One section per room, listing every light Lighting Manager has
  *     adopted (the "Include on dashboard" tick is not used here: this is
  *     the complete picture of the house). Each room has its own on/off
- *     buttons and can be folded away (remembered on this device).
+ *     buttons.
  *   - Each light is the same native tile as everywhere else (tap toggles,
  *     double-tap opens the countdown), with the light's Lighting Manager
  *     tile width and brightness slider.
  *   - Under each room's tiles, a "Schedules" row opens Niels Faber's
  *     Scheduler Card for that room's lights (view, edit and add schedules
- *     right on the page). It starts open for rooms that have schedules; the
- *     choice is remembered on this device.
+ *     right on the page). It starts folded; open it with its arrow.
  *
  * Add a room, adopt a light, rename or reorder in Lighting Manager and the
  * card follows. Any user can use it; there is no editing here.
  */
 const OVERVIEW_REFRESH_MS = 60000;
-const OVERVIEW_COLLAPSED_KEY = 'lighting-manager-overview-collapsed';
-const OVERVIEW_SCHEDULES_KEY = 'lighting-manager-overview-schedules';
 
 class LightingManagerOverviewCard extends HTMLElement {
   constructor() {
@@ -3309,8 +3306,7 @@ class LightingManagerOverviewCard extends HTMLElement {
     this._nowKey = null;
     this._rooms = [];
     this._schedCards = [];
-    this._collapsed = this._loadCollapsed();
-    this._schedOpen = this._loadSchedOpen();
+    this._schedOpen = {}; // rooms whose Schedules row the user has opened
   }
 
   setConfig(config) {
@@ -3392,42 +3388,6 @@ class LightingManagerOverviewCard extends HTMLElement {
     }
     this._loaded = true;
     this._render();
-  }
-
-  _loadCollapsed() {
-    try {
-      const raw = window.localStorage.getItem(OVERVIEW_COLLAPSED_KEY);
-      const list = raw ? JSON.parse(raw) : [];
-      return new Set(Array.isArray(list) ? list : []);
-    } catch (err) {
-      return new Set();
-    }
-  }
-
-  _saveCollapsed() {
-    try {
-      window.localStorage.setItem(OVERVIEW_COLLAPSED_KEY, JSON.stringify([...this._collapsed]));
-    } catch (err) {
-      /* remembering the folded rooms is a convenience only */
-    }
-  }
-
-  _loadSchedOpen() {
-    try {
-      const raw = window.localStorage.getItem(OVERVIEW_SCHEDULES_KEY);
-      const obj = raw ? JSON.parse(raw) : {};
-      return obj && typeof obj === 'object' ? obj : {};
-    } catch (err) {
-      return {};
-    }
-  }
-
-  _saveSchedOpen() {
-    try {
-      window.localStorage.setItem(OVERVIEW_SCHEDULES_KEY, JSON.stringify(this._schedOpen));
-    } catch (err) {
-      /* remembering this is a convenience only */
-    }
   }
 
   _lightName(light) {
@@ -3564,8 +3524,7 @@ class LightingManagerOverviewCard extends HTMLElement {
       .lm-ov-title { font-size:20px; font-weight:500; margin:0; padding:0 2px; }
       .lm-ov-head { display:flex; align-items:center; gap:8px; margin:0 0 8px; min-height:36px; }
       .lm-ov-head-main { display:flex; align-items:center; gap:8px; flex:1; min-width:0;
-        cursor:pointer; background:transparent; border:0; padding:0; font:inherit;
-        color:var(--primary-text-color); text-align:left; }
+        padding:0; font:inherit; color:var(--primary-text-color); text-align:left; }
       .lm-ov-head-main ha-icon { --mdc-icon-size:22px; color:var(--secondary-text-color); flex:none; }
       .lm-ov-room-name { font-size:16px; font-weight:500; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
       .lm-ov-chip { flex:none; font-size:12px; padding:2px 9px; border-radius:10px;
@@ -3614,7 +3573,6 @@ class LightingManagerOverviewCard extends HTMLElement {
     nowHead.className = 'lm-ov-head';
     const nowTitle = document.createElement('div');
     nowTitle.className = 'lm-ov-head-main';
-    nowTitle.style.cursor = 'default';
     nowTitle.innerHTML =
       '<ha-icon icon="mdi:lightbulb-on-outline"></ha-icon><span class="lm-ov-room-name">On now</span>';
     this._nowChip = document.createElement('span');
@@ -3664,11 +3622,9 @@ class LightingManagerOverviewCard extends HTMLElement {
 
     const head = document.createElement('div');
     head.className = 'lm-ov-head';
-    const main = document.createElement('button');
-    main.type = 'button';
+    const main = document.createElement('div');
     main.className = 'lm-ov-head-main';
     const area = this._hass?.areas?.[room.areaId];
-    const chevron = document.createElement('ha-icon');
     const icon = document.createElement('ha-icon');
     icon.setAttribute('icon', area?.icon || 'mdi:lightbulb-outline');
     const name = document.createElement('span');
@@ -3676,7 +3632,7 @@ class LightingManagerOverviewCard extends HTMLElement {
     name.textContent = room.name;
     const chip = document.createElement('span');
     chip.className = 'lm-ov-chip';
-    main.append(chevron, icon, name, chip);
+    main.append(icon, name, chip);
     head.appendChild(main);
 
     const ids = room.lights.map(l => l.entity_id);
@@ -3725,11 +3681,7 @@ class LightingManagerOverviewCard extends HTMLElement {
       schedBody.className = 'lm-ov-schedbody';
       section.append(schedHead, schedBody);
 
-      const isOpen = () => {
-        const saved = this._schedOpen[collapseKey];
-        if (typeof saved === 'boolean') return saved;
-        return room.lights.some(l => l.schedulable && l.schedules > 0);
-      };
+      const isOpen = () => this._schedOpen[collapseKey] === true;
       applySched = () => {
         const open = isOpen();
         schedBody.hidden = !open;
@@ -3742,30 +3694,10 @@ class LightingManagerOverviewCard extends HTMLElement {
       };
       schedHead.addEventListener('click', () => {
         this._schedOpen[collapseKey] = !isOpen();
-        this._saveSchedOpen();
         applySched();
       });
       applySched();
     }
-
-    const applyCollapsed = () => {
-      const folded = this._collapsed.has(collapseKey);
-      grid.hidden = folded;
-      if (schedHead) schedHead.hidden = folded;
-      if (schedBody) {
-        if (folded) schedBody.hidden = true;
-        else applySched();
-      }
-      chevron.setAttribute('icon', folded ? 'mdi:chevron-right' : 'mdi:chevron-down');
-      main.setAttribute('aria-expanded', String(!folded));
-    };
-    main.addEventListener('click', () => {
-      if (this._collapsed.has(collapseKey)) this._collapsed.delete(collapseKey);
-      else this._collapsed.add(collapseKey);
-      this._saveCollapsed();
-      applyCollapsed();
-    });
-    applyCollapsed();
 
     this._roomRefs.push({ ids, chip, offBtn, onBtn, schedChip, areaKey: room.areaId, lights: room.lights });
     return section;
