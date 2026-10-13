@@ -101,7 +101,8 @@ Two cards ship with the integration and are loaded globally via
   Change / Cancel countdown / OK). A running countdown also shows a small
   timer badge on the tile.
 - `custom:lighting-manager-room-card` - `area: living_room` (id or name);
-  optional `columns: 2`. Draws every adopted, shown-on-dashboard light in
+  optional `columns: 2`. A light can also show a brightness slider under its
+  tile (tick "Show brightness slider on dashboard" in the panel). Draws every adopted, shown-on-dashboard light in
   the Area as a countdown tile, using each light's Lighting Manager
   settings (name, order, tile width half/full). Nothing to maintain: add
   or hide a light in Lighting Manager and the card follows.

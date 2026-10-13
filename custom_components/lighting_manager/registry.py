@@ -220,6 +220,17 @@ def get_light_type(hass: HomeAssistant, entity_id: str) -> str | None:
     return None
 
 
+def async_get_device_id(hass: HomeAssistant, entity_id: str) -> str | None:
+    """The Home Assistant device an entity belongs to, if any.
+
+    Used to link from Lighting Manager to the device's settings page
+    (/config/devices/device/<id>). Home Assistant has no address that opens an
+    entity's own settings dialog directly.
+    """
+    entry = er.async_get(hass).async_get(entity_id)
+    return entry.device_id if entry is not None else None
+
+
 def async_get_source_integration(hass: HomeAssistant, entity_id: str) -> str | None:
     """Diagnostic-only originating integration for an entity (PRD §11)."""
     registry = er.async_get(hass)

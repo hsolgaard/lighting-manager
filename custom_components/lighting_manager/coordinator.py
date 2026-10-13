@@ -57,6 +57,7 @@ class LightView:
     countdown_remaining_seconds: int | None
     countdown_expires_at: str | None
     source_integration: str | None
+    device_id: str | None
     area_mismatch: tuple[str, str] | None
     status: str
 
@@ -214,6 +215,7 @@ class LightingManagerCoordinator:
             countdown_remaining_seconds=self.countdown.remaining_seconds(entity_id),
             countdown_expires_at=self.countdown.expires_at_iso(entity_id),
             source_integration=registry.async_get_source_integration(self.hass, entity_id),
+            device_id=registry.async_get_device_id(self.hass, entity_id),
             area_mismatch=area_mismatch,
             status=status,
         )

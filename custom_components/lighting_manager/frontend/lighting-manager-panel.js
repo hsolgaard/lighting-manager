@@ -324,6 +324,8 @@ const CSS_TEXT = `
   .lm-section-title { font-weight: 500; margin: 20px 0 8px; border-top: 1px solid var(--divider-color); padding-top: 16px; }
   .lm-section-title:first-of-type { border-top: none; padding-top: 0; margin-top: 0; }
   .lm-checkbox-row { display: flex; align-items: center; gap: 8px; }
+  .lm-link { color: var(--primary-color); text-decoration: none; font-size: 0.9em; }
+  .lm-link:hover { text-decoration: underline; }
   .lm-overlay {
     position: fixed; inset: 0; background: rgba(0,0,0,0.5);
     display: flex; align-items: center; justify-content: center;
@@ -1369,6 +1371,31 @@ class LightingManagerPanel extends HTMLElement {
     );
     this._nameInput = nameField.input;
     this._detailEl.appendChild(nameField.row);
+
+    // -- Link to Home Assistant's own settings for this light (new tab) --
+    // Home Assistant has no address that opens a single entity's settings
+    // dialog, so go to the device page (click the light there, then the gear
+    // for name, icon and entity ID) - or, for a light with no device, the
+    // entity list for its integration.
+    const haLinkRow = document.createElement("div");
+    haLinkRow.className = "lm-field";
+    const haLink = document.createElement("a");
+    haLink.className = "lm-link";
+    haLink.target = "_blank";
+    haLink.rel = "noopener noreferrer";
+    if (light.device_id) {
+      haLink.href = `/config/devices/device/${encodeURIComponent(light.device_id)}`;
+      haLink.textContent = "Open device settings in Home Assistant ↗";
+      haLink.title = "Opens the device page in a new tab. Click this light there, then the gear, for its name, icon and entity ID.";
+    } else {
+      haLink.href = light.source_integration
+        ? `/config/entities?domain=${encodeURIComponent(light.source_integration)}`
+        : "/config/entities";
+      haLink.textContent = "Open entity list in Home Assistant ↗";
+      haLink.title = "This light has no device. Opens the entity list in a new tab; click the light there for its settings.";
+    }
+    haLinkRow.appendChild(haLink);
+    this._detailEl.appendChild(haLinkRow);
 
     // -- Area field --
     const areaField = this._makeAreaFieldRow(light);
