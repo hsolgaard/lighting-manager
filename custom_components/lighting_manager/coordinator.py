@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
 from homeassistant.core import Event, HomeAssistant, callback
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.event import (
     async_track_state_change_event,
     async_track_time_interval,
@@ -436,3 +437,80 @@ class LightingManagerCoordinator:
         # would surface it.
         record.last_known_entity_id = entity_id
         await self.store.async_set_light(key, record)
+
+    async def async_replace_light(self, old_entity_id: str, new_entity_id: str) -> dict:
+        """Replace one light with another, carrying its configuration forward (PRD §24).
+
+        The new light takes over the OLD entity ID, so schedules,
+        automations, scenes, scripts and dashboards that name the old
+        light keep working untouched. Carried over: name, room, icon,
+        type and other labels, and Lighting Manager's own per-light
+        settings (dashboard / scheduling inclusion, tile width, brightness
+        slider). The old entry is then removed if it is dead, or renamed
+        aside and disabled if it still works (e.g. a Tuya WiFi bulb being
+        upgraded to Zigbee) - removing a live entry would just let its
+        integration re-create it as a "new" light after the next restart.
+        """
+        if old_entity_id == new_entity_id:
+            raise ValueError("Choose two different lights")
+        ent_reg = er.async_get(self.hass)
+        old_entry = ent_reg.async_get(old_entity_id)
+        new_entry = ent_reg.async_get(new_entity_id)
+        if old_entry is None:
+            raise ValueError(f"{old_entity_id} has no entity registry entry")
+        if new_entry is None:
+            raise ValueError(f"{new_entity_id} has no entity registry entry")
+
+        old_key = registry.stable_key_for_entity(self.hass, old_entity_id)
+        new_key = registry.stable_key_for_entity(self.hass, new_entity_id)
+        new_record_before = self.store.get_light(new_key)
+        if new_record_before.adopted:
+            raise ValueError(
+                f"{new_entity_id} is already set up in Lighting Manager - "
+                "only a new light can take over another light's place"
+            )
+
+        old_record = self.store.get_light(old_key)
+        old_state = self.hass.states.get(old_entity_id)
+        old_name = old_entry.name or (old_state.name if old_state else None) or old_record.last_known_name
+        old_area = registry.async_get_effective_area(self.hass, old_entity_id)
+        new_area = registry.async_get_effective_area(self.hass, new_entity_id)
+        known_type_labels = set(registry._label_id_cache(self.hass).values())
+        old_has_type = bool(set(old_entry.labels) & known_type_labels)
+        old_platform = old_entry.platform
+        old_device_id = old_entry.device_id
+
+        # A countdown on the old light means nothing for the new one.
+        await self.countdown.async_cancel(old_entity_id)
+        await self.countdown.async_cancel(new_entity_id)
+
+        result = await registry.async_take_over_entity_id(
+            self.hass,
+            old_entity_id,
+            new_entity_id,
+            name=old_name,
+            icon=old_entry.icon,
+            area_id=old_area if old_area and old_area != new_area else None,
+            extra_labels=set(old_entry.labels),
+            drop_type_labels=old_has_type,
+        )
+
+        record = ManagedLightRecord(**{**old_record.__dict__})
+        record.adopted = True
+        record.ignored = False
+        record.last_known_entity_id = old_entity_id
+        record.last_known_name = old_name
+        record.last_known_area_id = old_area
+        self.store.data.lights.pop(old_key, None)
+        await self.store.async_set_light(new_key, record)
+
+        self._first_seen_missing.pop(old_entity_id, None)
+        self._first_seen_missing.pop(new_entity_id, None)
+
+        return {
+            "entity_id": old_entity_id,
+            "outcome": result["outcome"],
+            "old_entity_id_now": result["old_entity_id_now"],
+            "old_platform": old_platform,
+            "old_device_id": old_device_id,
+        }

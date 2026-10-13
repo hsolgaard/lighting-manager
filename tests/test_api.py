@@ -559,3 +559,44 @@ async def test_list_lights_reports_area_order_once_saved(
 
     assert lights[second.entity_id]["area_order"] == 0
     assert lights[first.entity_id]["area_order"] == 1
+
+
+async def test_replace_light_success_and_non_admin(
+    api_hass: HomeAssistant, hass_ws_client, hass_admin_user, hass_read_only_user, hass_read_only_access_token
+) -> None:
+    ent_reg = er.async_get(api_hass)
+    old = ent_reg.async_get_or_create("light", "test_platform", "old-1").entity_id
+    new = ent_reg.async_get_or_create("light", "test_platform", "new-1", suggested_object_id="new_bulb").entity_id
+    api_hass.states.async_set(old, "unavailable")
+    api_hass.states.async_set(new, "on")
+    from custom_components.lighting_manager import registry
+
+    registry.STATE_CLEAR_TIMEOUT = 0.2
+    coordinator = api_hass.data[DOMAIN]["coordinator"]
+    await coordinator.async_adopt_light(old, name="Old one")
+    client = await hass_ws_client(api_hass)
+
+    await client.send_json_auto_id(
+        {"type": f"{DOMAIN}/replace_light", "old_entity_id": old, "new_entity_id": new}
+    )
+    response = await client.receive_json()
+
+    assert response["success"] is True
+    assert response["result"]["entity_id"] == old
+    assert response["result"]["outcome"] == "removed"
+    assert ent_reg.async_get(old).unique_id == "new-1"
+
+    await client.send_json_auto_id(
+        {"type": f"{DOMAIN}/replace_light", "old_entity_id": old, "new_entity_id": old}
+    )
+    bad = await client.receive_json()
+    assert bad["success"] is False
+    assert bad["error"]["code"] == "invalid_format"
+
+    ro_client = await hass_ws_client(api_hass, hass_read_only_access_token)
+    await ro_client.send_json_auto_id(
+        {"type": f"{DOMAIN}/replace_light", "old_entity_id": old, "new_entity_id": new}
+    )
+    denied = await ro_client.receive_json()
+    assert denied["success"] is False
+    assert denied["error"]["code"] == "unauthorized"

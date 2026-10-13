@@ -46,6 +46,7 @@ def async_register_websocket_commands(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_set_brightness_slider)
     websocket_api.async_register_command(hass, ws_set_scheduling_included)
     websocket_api.async_register_command(hass, ws_promote_switch)
+    websocket_api.async_register_command(hass, ws_replace_light)
     websocket_api.async_register_command(hass, ws_start_countdown)
     websocket_api.async_register_command(hass, ws_cancel_countdown)
     websocket_api.async_register_command(hass, ws_list_countdowns)
@@ -206,6 +207,27 @@ async def ws_set_icon(hass: HomeAssistant, connection, msg) -> None:
         connection.send_error(msg["id"], "invalid_format", str(err))
         return
     connection.send_result(msg["id"])
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): f"{DOMAIN}/replace_light",
+        vol.Required("old_entity_id"): _LIGHT_OR_SWITCH,
+        vol.Required("new_entity_id"): _LIGHT_OR_SWITCH,
+    }
+)
+@websocket_api.async_response
+async def ws_replace_light(hass: HomeAssistant, connection, msg) -> None:
+    """PRD §24: the new light takes over the old light's entity ID and settings."""
+    try:
+        result = await _coordinator(hass).async_replace_light(
+            msg["old_entity_id"], msg["new_entity_id"]
+        )
+    except ValueError as err:
+        connection.send_error(msg["id"], "invalid_format", str(err))
+        return
+    connection.send_result(msg["id"], result)
 
 
 @websocket_api.require_admin

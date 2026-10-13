@@ -425,3 +425,143 @@ async def test_rename_on_registry_less_entity_raises(
 
     with pytest.raises(KeyError):
         await coordinator.async_rename_light("light.template_light", "New Name")
+
+
+# -- light replacement (PRD §24) -------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def _fast_state_clear(monkeypatch):
+    monkeypatch.setattr(registry, "STATE_CLEAR_TIMEOUT", 0.2)
+
+
+async def _adopted_old_light(hass, coordinator, *, state="unavailable"):
+    from homeassistant.helpers import area_registry as ar
+
+    area = ar.async_get(hass).async_create("Kitchen")
+    old = _register_light(hass, "light.kitchen_lamp", "old-1")
+    await coordinator.async_adopt_light(old, name="Kitchen lamp", area_id=area.id, light_type="table_lamp")
+    await coordinator.async_set_tile_width(old, "full")
+    await coordinator.async_set_brightness_slider(old, True)
+    await coordinator.async_set_scheduling_included(old, False)
+    await coordinator.async_set_icon(old, "mdi:floor-lamp")
+    hass.states.async_set(old, state)
+    return old, area
+
+
+async def test_replace_dead_light_takes_over_id_and_settings(
+    hass: HomeAssistant, coordinator: LightingManagerCoordinator
+) -> None:
+    old, area = await _adopted_old_light(hass, coordinator)
+    new = _register_light(hass, "light.zigbee_bulb_7", "new-1")
+    ent_reg = er.async_get(hass)
+
+    result = await coordinator.async_replace_light(old, new)
+
+    assert result["entity_id"] == old
+    assert result["outcome"] == "removed"
+    # The new entry now owns the old entity ID, and nothing is left aside.
+    entry = ent_reg.async_get(old)
+    assert entry.unique_id == "new-1"
+    assert ent_reg.async_get(new) is None
+    assert ent_reg.async_get(result["old_entity_id_now"]) is None
+    # Registry settings carried over.
+    assert entry.name == "Kitchen lamp"
+    assert entry.icon == "mdi:floor-lamp"
+    assert entry.area_id == area.id
+    assert registry.get_light_type(hass, old) == "table_lamp"
+    # Lighting Manager settings carried over; old record gone.
+    record = coordinator.store.get_light("test_platform:new-1")
+    assert record.adopted and not record.ignored
+    assert record.tile_width == "full"
+    assert record.brightness_slider is True
+    assert record.scheduling_included is False
+    assert "test_platform:old-1" not in coordinator.store.data.lights
+
+
+async def test_replace_working_light_disables_old_one(
+    hass: HomeAssistant, coordinator: LightingManagerCoordinator
+) -> None:
+    old, _ = await _adopted_old_light(hass, coordinator, state="on")
+    new = _register_light(hass, "light.zigbee_bulb_7", "new-1")
+    ent_reg = er.async_get(hass)
+
+    result = await coordinator.async_replace_light(old, new)
+
+    assert result["outcome"] == "disabled"
+    assert result["old_entity_id_now"] == f"{old}_replaced"
+    aside = ent_reg.async_get(result["old_entity_id_now"])
+    assert aside is not None
+    assert aside.unique_id == "old-1"
+    assert aside.disabled_by == er.RegistryEntryDisabler.USER
+    assert ent_reg.async_get(old).unique_id == "new-1"
+
+
+async def test_replace_keeps_new_lights_own_area_when_same(
+    hass: HomeAssistant, coordinator: LightingManagerCoordinator
+) -> None:
+    old, area = await _adopted_old_light(hass, coordinator)
+    new = _register_light(hass, "light.zigbee_bulb_7", "new-1")
+    await registry.async_set_entity_area(hass, new, area.id)
+
+    await coordinator.async_replace_light(old, new)
+
+    assert registry.async_get_effective_area(hass, old) == area.id
+
+
+async def test_replace_cancels_countdown_and_clears_inbox_entry(
+    hass: HomeAssistant, coordinator: LightingManagerCoordinator
+) -> None:
+    old, _ = await _adopted_old_light(hass, coordinator, state="on")
+    new = _register_light(hass, "light.zigbee_bulb_7", "new-1")
+    from pytest_homeassistant_custom_component.common import async_mock_service
+
+    async_mock_service(hass, "light", "turn_on")
+    await coordinator.countdown.async_start(old, 30)
+    assert coordinator.store.get_countdown(old) is not None
+
+    await coordinator.async_replace_light(old, new)
+
+    assert coordinator.store.get_countdown(old) is None
+    # (A real integration moves its own state when the entity is renamed;
+    # these bare test states have no integration behind them.)
+    hass.states.async_remove(new)
+    assert not any(i.condition == INBOX_NEW for i in coordinator.async_build_inbox())
+
+
+async def test_replace_merges_type_label_without_duplicating(
+    hass: HomeAssistant, coordinator: LightingManagerCoordinator
+) -> None:
+    old, _ = await _adopted_old_light(hass, coordinator)
+    new = _register_light(hass, "light.zigbee_bulb_7", "new-1")
+    await registry.async_set_light_type(hass, new, "ceiling")
+
+    await coordinator.async_replace_light(old, new)
+
+    labels = er.async_get(hass).async_get(old).labels
+    known = set(registry._label_id_cache(hass).values())
+    assert len(set(labels) & known) == 1
+    assert registry.get_light_type(hass, old) == "table_lamp"
+
+
+async def test_replace_rejects_bad_requests(
+    hass: HomeAssistant, coordinator: LightingManagerCoordinator
+) -> None:
+    old, _ = await _adopted_old_light(hass, coordinator)
+    new = _register_light(hass, "light.zigbee_bulb_7", "new-1")
+
+    with pytest.raises(ValueError):
+        await coordinator.async_replace_light(old, old)
+    with pytest.raises(ValueError):
+        await coordinator.async_replace_light(old, "light.no_such_light")
+    # An already-managed light cannot be the "new" one: its own schedules would break.
+    await coordinator.async_adopt_light(new)
+    with pytest.raises(ValueError):
+        await coordinator.async_replace_light(old, new)
+    # Cross-domain replacement can't keep the entity ID.
+    sw = _register_light(hass, "switch.plug", "sw-1")
+    other = _register_light(hass, "light.other_new", "new-2")
+    with pytest.raises(ValueError):
+        await coordinator.async_replace_light(other, sw)
+    # Nothing was changed by the failed attempts.
+    assert er.async_get(hass).async_get(old).unique_id == "old-1"

@@ -6,6 +6,7 @@ this data (PRD §4.7 "no second reality").
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 
 from homeassistant.core import HomeAssistant, State
@@ -153,6 +154,107 @@ def async_get_icon_override(hass: HomeAssistant, entity_id: str) -> str | None:
     """The icon the user has set in the entity registry, or None for the default."""
     entry = er.async_get(hass).async_get(entity_id)
     return entry.icon if entry is not None else None
+
+
+# --- Light replacement (PRD §24) ---------------------------------------------
+#
+# A replacement is "the new light takes over the old light's entity ID", so
+# every schedule, automation, scene, script and dashboard that names the old
+# entity keeps working untouched. Home Assistant refuses to rename an entity
+# onto an ID that is still registered, so the old entry is first moved out of
+# the way (renamed to <id>_replaced), the new entry is renamed onto the freed
+# ID, and only then is the old entry removed (dead) or disabled (still alive).
+
+# How long to wait for Home Assistant to drop the old entity's state after it
+# is renamed aside, before forcing it. A module constant so tests can shorten it.
+STATE_CLEAR_TIMEOUT = 5.0
+
+
+def async_is_dead(hass: HomeAssistant, entity_id: str) -> bool:
+    """True if the entity has no state or is unavailable (a dead light)."""
+    state = hass.states.get(entity_id)
+    return state is None or state.state == "unavailable"
+
+
+def _free_aside_id(hass: HomeAssistant, entity_id: str) -> str:
+    registry = er.async_get(hass)
+    domain, object_id = entity_id.split(".", 1)
+    candidate = f"{domain}.{object_id}_replaced"
+    n = 2
+    while registry.async_is_registered(candidate) or hass.states.get(candidate) is not None:
+        candidate = f"{domain}.{object_id}_replaced_{n}"
+        n += 1
+    return candidate
+
+
+async def _async_wait_state_cleared(hass: HomeAssistant, entity_id: str) -> None:
+    """Wait for the old ID's state to disappear; force it if Home Assistant is slow."""
+    waited = 0.0
+    while hass.states.get(entity_id) is not None and waited < STATE_CLEAR_TIMEOUT:
+        await asyncio.sleep(0.05)
+        waited += 0.05
+    if hass.states.get(entity_id) is not None:
+        hass.states.async_remove(entity_id)
+
+
+async def async_take_over_entity_id(
+    hass: HomeAssistant,
+    old_entity_id: str,
+    new_entity_id: str,
+    *,
+    name: str | None,
+    icon: str | None,
+    area_id: str | None,
+    extra_labels: set[str],
+    drop_type_labels: bool,
+) -> dict:
+    """Move new_entity_id onto old_entity_id's ID and retire the old entry.
+
+    Returns {"old_entity_id_now": <aside id>, "outcome": "removed"|"disabled"}.
+    Raises ValueError (after undoing the first step) if Home Assistant
+    refuses the rename.
+    """
+    registry = er.async_get(hass)
+    old_entry = registry.async_get(old_entity_id)
+    new_entry = registry.async_get(new_entity_id)
+    if old_entry is None or new_entry is None:
+        raise ValueError("Both lights must have an entity registry entry")
+    if old_entity_id.split(".")[0] != new_entity_id.split(".")[0]:
+        raise ValueError("A light can only be replaced by an entity of the same type (light/switch)")
+
+    dead = async_is_dead(hass, old_entity_id)
+    aside_id = _free_aside_id(hass, old_entity_id)
+
+    registry.async_update_entity(old_entity_id, new_entity_id=aside_id)
+    await _async_wait_state_cleared(hass, old_entity_id)
+
+    changes: dict = {"new_entity_id": old_entity_id}
+    if name:
+        changes["name"] = name
+    if icon:
+        changes["icon"] = icon
+    if area_id is not None:
+        changes["area_id"] = area_id
+    known = set(_label_id_cache(hass).values())
+    labels = set(new_entry.labels)
+    if drop_type_labels:
+        labels -= known
+    labels |= extra_labels
+    if labels != set(new_entry.labels):
+        changes["labels"] = labels
+    try:
+        registry.async_update_entity(new_entity_id, **changes)
+    except ValueError:
+        registry.async_update_entity(aside_id, new_entity_id=old_entity_id)
+        raise
+
+    if dead:
+        registry.async_remove(aside_id)
+        outcome = "removed"
+    else:
+        registry.async_update_entity(aside_id, disabled_by=er.RegistryEntryDisabler.USER)
+        outcome = "disabled"
+    return {"old_entity_id_now": aside_id, "outcome": outcome}
 
 
 # --- Light-type taxonomy via HA Labels (PRD §15) ----------------------------

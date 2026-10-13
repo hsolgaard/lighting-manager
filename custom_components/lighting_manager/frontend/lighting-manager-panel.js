@@ -120,6 +120,7 @@ const ACTION_SUCCESS_MESSAGES = {
   start_countdown: "Countdown started",
   cancel_countdown: "Countdown cancelled",
   promote_switch: "Switch added as a light",
+  replace_light: "Light replaced - schedules, room and settings carried over",
 };
 
 const CSS_TEXT = `
@@ -274,7 +275,7 @@ const CSS_TEXT = `
    * lines up with the real column of Area values in every row rather
    * than sitting flush at the header's own right edge (2026-09-15 fix -
    * see _renderInboxItem). */
-  .lm-inbox-list-header .actions { width: 190px; flex: none; }
+  .lm-inbox-list-header .actions { width: 270px; flex: none; }
   .lm-inbox-group { margin-bottom: 20px; }
   .lm-inbox-group h3 { font-size: 1em; margin: 0 0 8px; color: var(--secondary-text-color); }
   .lm-inbox-item {
@@ -304,7 +305,7 @@ const CSS_TEXT = `
    * regardless of how many buttons this condition has (0, 1, or 2) -
    * without this, Area's on-screen position shifted per condition group
    * even though its own width was already fixed (2026-09-15 bugfix). */
-  .lm-inbox-item .actions { width: 190px; flex: none; display: flex; justify-content: flex-end; gap: 6px; flex-wrap: wrap; }
+  .lm-inbox-item .actions { width: 270px; flex: none; display: flex; justify-content: flex-end; gap: 6px; flex-wrap: wrap; }
   .lm-detail h2 { font-size: 1.1em; margin: 0 0 2px; word-break: break-word; }
   .lm-detail .entity-id { font-family: monospace; font-size: 0.8em; color: var(--secondary-text-color); margin-bottom: 16px; word-break: break-all; }
   .lm-field { margin-bottom: 16px; }
@@ -496,7 +497,7 @@ class LightingManagerPanel extends HTMLElement {
 
   async _callAction(type, extra) {
     try {
-      await this._hass.callWS({ type: `lighting_manager/${type}`, ...extra });
+      this._lastActionResult = await this._hass.callWS({ type: `lighting_manager/${type}`, ...extra });
       this._clearError();
       // Whatever was "dirty" has just been saved (or the action wasn't a
       // field edit at all, in which case this is a harmless no-op) - the
@@ -1322,9 +1323,22 @@ class LightingManagerPanel extends HTMLElement {
         }, { primary: true })
       );
       actions.appendChild(
+        this._makeButton("Replaces…", (e) => {
+          e.stopPropagation();
+          this._openReplaceDialog({ newId: item.entity_id });
+        })
+      );
+      actions.appendChild(
         this._makeButton("Ignore", async (e) => {
           e.stopPropagation();
           await this._callAction("ignore_light", { entity_id: item.entity_id });
+        })
+      );
+    } else if (item.condition === "missing") {
+      actions.appendChild(
+        this._makeButton("Replace…", (e) => {
+          e.stopPropagation();
+          this._openReplaceDialog({ oldId: item.entity_id });
         })
       );
     } else if (item.condition === "area_mismatch" && item.detail) {
@@ -1540,6 +1554,11 @@ class LightingManagerPanel extends HTMLElement {
           })
         );
       }
+      adoptRow.appendChild(
+        this._makeButton("This replaces another light…", () =>
+          this._openReplaceDialog({ newId: light.entity_id })
+        )
+      );
       this._detailEl.appendChild(adoptRow);
     }
 
@@ -1708,6 +1727,26 @@ class LightingManagerPanel extends HTMLElement {
       schedInfo.innerHTML = `<span class="lm-badge" title="Read-only count. To create or edit a schedule, use the Scheduler Card (Niels Faber Scheduler) — Lighting Manager doesn't duplicate its editor.">${light.schedule_count} schedule${light.schedule_count === 1 ? "" : "s"}</span>`;
       this._detailEl.appendChild(schedInfo);
     }
+
+    if (light.adopted && !light.ignored) {
+      const replaceTitle = document.createElement("div");
+      replaceTitle.className = "lm-section-title";
+      replaceTitle.textContent = "Replace";
+      this._detailEl.appendChild(replaceTitle);
+      const replaceHint = document.createElement("div");
+      replaceHint.className = "lm-field meta";
+      replaceHint.style.color = "var(--secondary-text-color)";
+      replaceHint.textContent =
+        "Swapping in a new bulb, or moving to different technology (e.g. Wi-Fi to Zigbee)? " +
+        "Hand this light's name, room, schedules and settings to the new one.";
+      this._detailEl.appendChild(replaceHint);
+      const replaceRow = document.createElement("div");
+      replaceRow.className = "lm-field";
+      replaceRow.appendChild(
+        this._makeButton("Replace this light…", () => this._openReplaceDialog({ oldId: light.entity_id }))
+      );
+      this._detailEl.appendChild(replaceRow);
+    }
   }
 
   _makeFieldRow(labelText, buildInput, buttonText, onSave) {
@@ -1862,6 +1901,133 @@ class LightingManagerPanel extends HTMLElement {
     return { row };
   }
 
+  // -- Replace-light dialog (PRD §24) --------------------------------------
+
+  _openReplaceDialog({ oldId = null, newId = null } = {}) {
+    const oldCandidates = this._lights
+      .filter((l) => l.adopted && !l.ignored)
+      .sort((a, b) => a.name.localeCompare(b.name));
+    const newCandidates = this._lights
+      .filter((l) => !l.adopted)
+      .sort((a, b) => a.name.localeCompare(b.name));
+
+    const overlay = document.createElement("div");
+    overlay.className = "lm-overlay";
+    overlay.addEventListener("click", (e) => {
+      if (e.target === overlay) overlay.remove();
+    });
+    const box = document.createElement("div");
+    box.className = "lm-overlay-box";
+    overlay.appendChild(box);
+
+    const heading = document.createElement("h2");
+    heading.textContent = "Replace a light";
+    box.appendChild(heading);
+
+    const intro = document.createElement("p");
+    intro.className = "meta";
+    intro.style.color = "var(--secondary-text-color)";
+    intro.textContent =
+      "The new light takes over the old light's name, room, settings and entity ID, so every schedule, " +
+      "automation, scene and dashboard that uses the old light keeps working with no changes.";
+    box.appendChild(intro);
+
+    const describe = (l) => {
+      const note = l.state === "unavailable" ? " — not responding" : "";
+      return `${l.name} (${this._areaName(l.area_id)})${note}`;
+    };
+    const makeSelect = (labelText, candidates, preset, emptyText) => {
+      const field = document.createElement("div");
+      field.className = "lm-field";
+      const label = document.createElement("label");
+      label.textContent = labelText;
+      field.appendChild(label);
+      const select = document.createElement("select");
+      select.style.width = "100%";
+      const blank = document.createElement("option");
+      blank.value = "";
+      blank.textContent = candidates.length ? "— choose —" : emptyText;
+      select.appendChild(blank);
+      for (const l of candidates) {
+        const opt = document.createElement("option");
+        opt.value = l.entity_id;
+        opt.textContent = describe(l);
+        select.appendChild(opt);
+      }
+      if (preset && candidates.some((l) => l.entity_id === preset)) {
+        select.value = preset;
+        select.disabled = true; // the entry point already decided this one
+      }
+      field.appendChild(select);
+      box.appendChild(field);
+      return select;
+    };
+    const oldSelect = makeSelect("Old light (being replaced)", oldCandidates, oldId, "No managed lights yet");
+    const newSelect = makeSelect("New light", newCandidates, newId, "No new lights waiting in the Inbox");
+
+    const preview = document.createElement("div");
+    preview.className = "lm-field";
+    preview.style.fontSize = "0.9em";
+    box.appendChild(preview);
+
+    const buttons = document.createElement("div");
+    buttons.className = "lm-field-row";
+    const confirmBtn = this._makeButton(
+      "Replace light",
+      async () => {
+        confirmBtn.disabled = true;
+        const ok = await this._callAction("replace_light", {
+          old_entity_id: oldSelect.value,
+          new_entity_id: newSelect.value,
+        });
+        if (ok) {
+          overlay.remove();
+          this._selectEntity(oldSelect.value);
+        } else {
+          confirmBtn.disabled = false;
+        }
+      },
+      { primary: true, disabled: true }
+    );
+    buttons.appendChild(confirmBtn);
+    buttons.appendChild(this._makeButton("Cancel", () => overlay.remove()));
+    box.appendChild(buttons);
+
+    const addLine = (text) => {
+      const p = document.createElement("div");
+      p.style.margin = "4px 0";
+      p.textContent = text;
+      preview.appendChild(p);
+    };
+    const updatePreview = () => {
+      preview.innerHTML = "";
+      const oldL = this._lightsById.get(oldSelect.value);
+      const newL = this._lightsById.get(newSelect.value);
+      confirmBtn.disabled = !(oldL && newL);
+      if (!oldL || !newL) return;
+      addLine(`“${newL.name}” will become ${oldL.entity_id}, and keep the name “${oldL.name}”.`);
+      addLine(`Carried over: room (${this._areaName(oldL.area_id)}), icon, type and labels, and its dashboard, scheduling, tile and slider settings.`);
+      if (oldL.schedule_count > 0) {
+        addLine(`${oldL.schedule_count} schedule${oldL.schedule_count === 1 ? "" : "s"} stay linked automatically.`);
+      }
+      if (oldL.countdown_remaining_seconds !== null && oldL.countdown_remaining_seconds !== undefined) {
+        addLine("The old light's running countdown will be cancelled.");
+      }
+      if (oldL.state === "unavailable") {
+        addLine("The old light isn't responding, so it will be removed from Home Assistant.");
+      } else {
+        addLine(
+          `The old light still works, so it is not deleted: it will be disabled and renamed ${oldL.entity_id}_replaced. ` +
+            "You can delete its device in its own integration whenever you're ready."
+        );
+      }
+    };
+    oldSelect.addEventListener("change", updatePreview);
+    newSelect.addEventListener("change", updatePreview);
+    updatePreview();
+    this.appendChild(overlay);
+  }
+
   // -- Promote-switch dialog --------------------------------------------
 
   async _openPromoteSwitchDialog() {
@@ -1933,4 +2099,4 @@ class LightingManagerPanel extends HTMLElement {
 
 customElements.define("lighting-manager-panel", LightingManagerPanel);
 
-console.info("%c LIGHTING-MANAGER-PANEL %c table: room filter, Rooms view, icon editing ", "color:white;background:#03a9f4;font-weight:700;", "color:#03a9f4;background:white;font-weight:700;");
+console.info("%c LIGHTING-MANAGER-PANEL %c table: room filter, Rooms view, icon editing, replace light ", "color:white;background:#03a9f4;font-weight:700;", "color:#03a9f4;background:white;font-weight:700;");

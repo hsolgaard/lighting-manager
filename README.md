@@ -54,6 +54,13 @@ What's implemented vs. still to build:
 - Icon editing (`set_icon`): the light drawer edits the entity registry's
   own icon, so every tile (room card included) shows it. `LightView` gained
   `icon` and `area_order`.
+- Light replacement (`replace_light`, PRD §24): a new light takes over an old
+  light's entity ID, name, room, icon, labels and Lighting Manager settings,
+  so schedules, automations and dashboards keep working untouched. A dead
+  old light is removed; one that still works (e.g. Wi-Fi to Zigbee upgrade)
+  is renamed `<id>_replaced` and disabled so it can't reappear in the Inbox.
+  Started from the Replace button in a light's drawer, from "Replaces…" on a
+  new light in the Inbox, or "Replace…" on a missing one - one dialog.
 - `unignore_light` action (backend + websocket command) - added while
   building the Inbox UI; not in the original PRD, but an Ignore button
   with no way back would be a one-way trap.
@@ -67,7 +74,6 @@ What's implemented vs. still to build:
   there's no dedicated bulk-review screen yet.
 - Bulk operations (§9)
 - Schedule presentation UI (§19) and the specialist lighting dashboard (§22)
-- Hardware/entity replacement workflow (§24) - explicitly P1
 - Configurable table columns, saved filters (§26) - P1
 
 ### Open before the schedule UI specifically is finalized
