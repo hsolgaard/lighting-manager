@@ -26,10 +26,20 @@ _LOGGER = logging.getLogger(__name__)
 
 PANEL_URL = "lighting-manager-panel"
 # Dashboard cards that ship inside this integration (PRD Revision -
-# Lighting-Aware Dashboard Automation §4.2/§4.3). They are served from the
-# same static prefix as the panel and registered globally with
-# frontend.add_extra_js_url, so installing/updating Lighting Manager is the
-# only step: no Lovelace "Resources" entry and no file copied into www/.
+# Lighting-Aware Dashboard Automation §4.2/§4.3). They are built into ONE
+# script, BUNDLE_FILE (see scripts/build_bundle.py), served from the same
+# static prefix as the panel. Two ways it reaches the browser:
+#   1. Recommended: add /lighting_manager_static/lighting-manager-cards.js
+#      once as a Lovelace resource (Settings > Dashboards > Resources).
+#      Home Assistant waits for resources before drawing a dashboard, so
+#      every card is defined in time.
+#   2. Automatically, via frontend.add_extra_js_url - but Home Assistant
+#      does NOT wait for those, so on some page loads a card can lose the
+#      race and show "Custom element doesn't exist". Loading both is
+#      harmless: only the first load runs.
+# The individual card files stay served at their old URLs so any existing
+# Lovelace resource pointing at one keeps working.
+BUNDLE_FILE = "lighting-manager-cards.js"
 CARD_FILES = (
     "lighting-manager-countdown-card.js",
     "light-scheduler-list-card.js",
@@ -104,13 +114,14 @@ async def _async_register_panel(hass: HomeAssistant) -> None:
     static_path = hass.config.path(frontend_dir + "lighting-manager-panel.js")
     card_paths = {
         f"{STATIC_URL_PREFIX}/{name}": hass.config.path(frontend_dir + name)
-        for name in CARD_FILES
+        for name in (BUNDLE_FILE, *CARD_FILES)
     }
-    # Caching is on: every script is registered below with ?v=<file mtime>
-    # in its URL, so a new release has a new URL and is fetched fresh,
-    # while unchanged files come from the browser cache (fast start-up,
-    # shorter "Configuration error" flash). A deploy therefore needs a
-    # Home Assistant restart to take effect.
+    # Caching policy: only the panel is cached by the browser - its URL
+    # is registered with ?v=<file mtime>, so a new release has a new URL.
+    # The card scripts can be referenced by a FIXED address (a Lovelace
+    # resource), so they are served uncached and can never go stale; the
+    # bundle is small and the browser revalidates it cheaply.
+    # A deploy needs a Home Assistant restart (versions are read at start-up).
     # HA deprecated the synchronous hass.http.register_static_path() in
     # favour of an async, StaticPathConfig-based API at some point after
     # the 2024.3 release this scaffold was verified against (see the
@@ -123,14 +134,14 @@ async def _async_register_panel(hass: HomeAssistant) -> None:
         await hass.http.async_register_static_paths(
             [StaticPathConfig(PANEL_JS_MODULE, static_path, cache_headers=True)]
             + [
-                StaticPathConfig(url, path, cache_headers=True)
+                StaticPathConfig(url, path, cache_headers=False)
                 for url, path in card_paths.items()
             ]
         )
     except ImportError:
         hass.http.register_static_path(PANEL_JS_MODULE, static_path, cache_headers=True)
         for url, path in card_paths.items():
-            hass.http.register_static_path(url, path, cache_headers=True)
+            hass.http.register_static_path(url, path, cache_headers=False)
 
     await panel_custom.async_register_panel(
         hass,
@@ -145,11 +156,10 @@ async def _async_register_panel(hass: HomeAssistant) -> None:
 
     # After the panel registration (which pulls in the frontend), so the
     # frontend's url registry is guaranteed to exist. add_extra_js_url is
-    # idempotent (a set), so a reload doesn't duplicate the entries.
-    #
-    # The URL carries the file's modification time as a version, so a
-    # new release is always fetched fresh - browsers (Safari especially)
-    # otherwise keep running a cached copy of a script whose URL has not
-    # changed. Takes effect after a Home Assistant restart.
-    for url, path in card_paths.items():
-        frontend.add_extra_js_url(hass, f"{url}?v={_file_version(path)}")
+    # idempotent (a set), so a reload doesn't duplicate the entry. Only the
+    # bundle is registered; the version in the URL (file mtime) makes a new
+    # release load fresh.
+    bundle_url = f"{STATIC_URL_PREFIX}/{BUNDLE_FILE}"
+    frontend.add_extra_js_url(
+        hass, f"{bundle_url}?v={_file_version(card_paths[bundle_url])}"
+    )
