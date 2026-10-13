@@ -22,6 +22,7 @@ SOURCES = (
     "lighting-manager-scheduler-card.js",
     "lighting-manager-room-card.js",
     "lighting-manager-overview-card.js",
+    "lighting-manager-pages.js",
 )
 
 TAGS = (
@@ -30,6 +31,8 @@ TAGS = (
     "lighting-manager-scheduler-card",
     "lighting-manager-room-card",
     "lighting-manager-overview-card",
+    "lighting-manager-lights-page",
+    "lighting-manager-schedules-page",
 )
 
 

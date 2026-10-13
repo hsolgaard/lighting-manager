@@ -46,9 +46,19 @@ CARD_FILES = (
     "lighting-manager-scheduler-card.js",
     "lighting-manager-room-card.js",
     "lighting-manager-overview-card.js",
+    "lighting-manager-pages.js",
 )
 STATIC_URL_PREFIX = "/lighting_manager_static"
 PANEL_JS_MODULE = f"{STATIC_URL_PREFIX}/{PANEL_URL}.js"
+
+# Ready-made sidebar pages (PRD Revision §4.10): created by the integration so
+# a new user needs no YAML and no dashboard. Each is a custom panel whose web
+# component lives in the card bundle.
+# (url path, element, sidebar title, sidebar icon)
+EXTRA_PAGES = (
+    ("lighting-manager-lights", "lighting-manager-lights-page", "Lights", "mdi:lightbulb-group-outline"),
+    ("lighting-manager-schedules", "lighting-manager-schedules-page", "Light Schedules", "mdi:calendar-clock"),
+)
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -90,6 +100,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
 
     frontend.async_remove_panel(hass, PANEL_URL)
+    for url_path, *_rest in EXTRA_PAGES:
+        frontend.async_remove_panel(hass, url_path)
     async_unregister_services(hass)
     hass.data.pop(DOMAIN, None)
     return True
@@ -154,6 +166,24 @@ async def _async_register_panel(hass: HomeAssistant) -> None:
         require_admin=False,
         embed_iframe=False,
     )
+
+    # The two ready-made pages. Their web components are defined by the card
+    # bundle, which doubles as the panel module.
+    bundle_module = (
+        f"{STATIC_URL_PREFIX}/{BUNDLE_FILE}"
+        f"?v={_file_version(card_paths[f'{STATIC_URL_PREFIX}/{BUNDLE_FILE}'])}"
+    )
+    for url_path, element, title, icon in EXTRA_PAGES:
+        await panel_custom.async_register_panel(
+            hass,
+            webcomponent_name=element,
+            frontend_url_path=url_path,
+            module_url=bundle_module,
+            sidebar_title=title,
+            sidebar_icon=icon,
+            require_admin=False,
+            embed_iframe=False,
+        )
 
     # After the panel registration (which pulls in the frontend), so the
     # frontend's url registry is guaranteed to exist. add_extra_js_url is

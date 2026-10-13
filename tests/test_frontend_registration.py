@@ -76,3 +76,28 @@ async def test_bundle_is_registered_as_extra_js_and_cache_policy(hass: HomeAssis
     for name in CARD_FILES:
         assert served[f"{STATIC_URL_PREFIX}/{name}"] is False
     assert served[PANEL_JS_MODULE] is True
+
+
+async def test_ready_made_pages_are_registered_in_the_sidebar(hass: HomeAssistant) -> None:
+    hass.http = MagicMock()
+    hass.http.async_register_static_paths = AsyncMock()
+    register = AsyncMock()
+
+    with patch.object(integration.panel_custom, "async_register_panel", register), patch.object(
+        integration.frontend, "add_extra_js_url"
+    ):
+        await integration._async_register_panel(hass)
+
+    pages = {c.kwargs["frontend_url_path"]: c.kwargs for c in register.call_args_list}
+    assert set(pages) == {
+        "lighting-manager-panel",
+        "lighting-manager-lights",
+        "lighting-manager-schedules",
+    }
+    for url_path, element, title, _icon in integration.EXTRA_PAGES:
+        kwargs = pages[url_path]
+        assert kwargs["webcomponent_name"] == element
+        assert kwargs["sidebar_title"] == title
+        # Everyone in the house can use them; the bundle defines the element.
+        assert kwargs["require_admin"] is False
+        assert kwargs["module_url"].startswith(f"{STATIC_URL_PREFIX}/{BUNDLE_FILE}?v=")
