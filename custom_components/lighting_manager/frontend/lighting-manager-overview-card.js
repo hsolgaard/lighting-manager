@@ -1,5 +1,5 @@
 /**
- * Lighting Manager Overview Card  v1.2.0
+ * Lighting Manager Overview Card  v1.3.0
  * (PRD Revision - Lighting-Aware Dashboard Automation, section 4.8.)
  *
  * One card, a whole lighting page:
@@ -10,7 +10,8 @@
  * `show_schedules: false` to leave out the schedules under each room.
  *
  * What it draws, with nothing to maintain:
- *   - "On now": every light that is on, with its room, and Turn all off.
+ *   - "On now": every light that is on, each tile showing its room in
+ *     place of the redundant "On", and Turn all off.
  *   - One section per room, listing every light Lighting Manager has
  *     adopted (the "Include on dashboard" tick is not used here: this is
  *     the complete picture of the house). Each room has its own on/off
@@ -187,12 +188,17 @@ class LightingManagerOverviewCard extends HTMLElement {
 
   // ---- drawing -----------------------------------------------------------
 
-  _makeTile(entityId, slider) {
+  _makeTile(entityId, slider, showRoom = false) {
     const tile = document.createElement('lighting-manager-countdown-card');
     const tileConfig = { type: 'custom:lighting-manager-countdown-card', entity: entityId };
     if (slider) {
       tileConfig.features = [{ type: 'light-brightness' }];
       tileConfig.features_position = 'bottom';
+    }
+    if (showRoom) {
+      // Every light in "On now" is on, so the "On" line says nothing: show
+      // the light's room there instead (Home Assistant's own area name).
+      tileConfig.state_content = ['area_name'];
     }
     tile.setConfig(tileConfig);
     if (this._hass) tile.hass = this._hass;
@@ -280,8 +286,6 @@ class LightingManagerOverviewCard extends HTMLElement {
       .lm-ov-alloff:disabled { opacity:.35; cursor:default; }
       .lm-ov-grid { display:grid; gap:var(--lm-room-gap, 8px); }
       .lm-ov-cell { position:relative; min-width:0; }
-      .lm-ov-area { font-size:11px; color:var(--secondary-text-color); padding:0 4px 2px;
-        overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
       .lm-ov-cell > lighting-manager-countdown-card { display:block; }
       .lm-ov-now { border:1px solid var(--divider-color); border-radius:16px; padding:12px;
         background:color-mix(in srgb, var(--state-light-active-color, var(--primary-color)) 7%, transparent); }
@@ -478,11 +482,7 @@ class LightingManagerOverviewCard extends HTMLElement {
     for (const light of items) {
       const cell = document.createElement('div');
       cell.className = 'lm-ov-cell';
-      const caption = document.createElement('div');
-      caption.className = 'lm-ov-area';
-      caption.textContent = this._areaName(light.area_id);
-      cell.appendChild(caption);
-      const tile = this._makeTile(light.entity_id, false);
+      const tile = this._makeTile(light.entity_id, false, true);
       this._nowTiles.push(tile);
       cell.appendChild(tile);
       this._nowGrid.appendChild(cell);
