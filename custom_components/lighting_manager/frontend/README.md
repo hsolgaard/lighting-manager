@@ -90,12 +90,13 @@ Two cards ship with the integration and are loaded globally via
   or hide a light in Lighting Manager and the card follows.
 - `custom:lighting-manager-overview-card` - no required options (optional
   `title`, `columns`, `show_schedules: false`). A whole lighting page from
-  one card: "On now" (every light that is on, with its room, and Turn all
-  off), then one section per room with that room's on/off buttons; sections
-  fold away (remembered on the device). Shows every adopted light, whatever
-  its "Include on dashboard" tick; tiles are the countdown tiles, with the
-  light's tile width and brightness slider. A clock on each tile shows the
-  number of schedules and opens that light's schedule dialog.
+  one card: an "On now" panel (every light that is on, with its room, and
+  Turn all off), a divider, then one section per room with that room's
+  on/off buttons; sections fold away (remembered on the device). Shows every
+  adopted light, whatever its "Include on dashboard" tick; tiles are the
+  countdown tiles, with the light's tile width and brightness slider. Under
+  each room's tiles a "Schedules" row shows Niels Faber's Scheduler Card for
+  that room's lights (open by default for rooms that have schedules).
 - `custom:light-scheduler-list-card` - `area: <area_id>` (Lighting Manager
   resolves the adopted lights, manual order) or the legacy `lights:` list.
   Still uses Niels Faber's Scheduler component for the schedules

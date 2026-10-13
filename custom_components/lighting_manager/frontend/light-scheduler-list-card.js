@@ -648,13 +648,6 @@ class LightSchedulerListCard extends HTMLElement {
     }
   }
 
-  // Public: lets another Lighting Manager card (the overview card) open
-  // this same schedule dialog for given lights without duplicating it.
-  openSchedulerDialog(hass, title, entities) {
-    this._hass = hass;
-    return this._openScheduler(title, entities);
-  }
-
   _closeScheduler() {
     if (this._onSchedulerKey) {
       document.removeEventListener('keydown', this._onSchedulerKey);

@@ -1285,13 +1285,6 @@ class LightSchedulerListCard extends HTMLElement {
     }
   }
 
-  // Public: lets another Lighting Manager card (the overview card) open
-  // this same schedule dialog for given lights without duplicating it.
-  openSchedulerDialog(hass, title, entities) {
-    this._hass = hass;
-    return this._openScheduler(title, entities);
-  }
-
   _closeScheduler() {
     if (this._onSchedulerKey) {
       document.removeEventListener('keydown', this._onSchedulerKey);
@@ -3266,7 +3259,7 @@ console.info(
 try {
 {
 /**
- * Lighting Manager Overview Card  v1.0.0
+ * Lighting Manager Overview Card  v1.1.0
  * (PRD Revision - Lighting-Aware Dashboard Automation, section 4.8.)
  *
  * One card, a whole lighting page:
@@ -3274,7 +3267,7 @@ try {
  *   type: custom:lighting-manager-overview-card
  *
  * Optional: `title: Lights` (default), `columns: 2` (1-6), and
- * `show_schedules: false` to hide the per-light clock.
+ * `show_schedules: false` to leave out the schedules under each room.
  *
  * What it draws, with nothing to maintain:
  *   - "On now": every light that is on, with its room, and Turn all off.
@@ -3284,14 +3277,18 @@ try {
  *     buttons and can be folded away (remembered on this device).
  *   - Each light is the same native tile as everywhere else (tap toggles,
  *     double-tap opens the countdown), with the light's Lighting Manager
- *     tile width and brightness slider. A small clock on the tile shows
- *     how many schedules the light has and opens its schedule dialog.
+ *     tile width and brightness slider.
+ *   - Under each room's tiles, a "Schedules" row opens Niels Faber's
+ *     Scheduler Card for that room's lights (view, edit and add schedules
+ *     right on the page). It starts open for rooms that have schedules; the
+ *     choice is remembered on this device.
  *
  * Add a room, adopt a light, rename or reorder in Lighting Manager and the
  * card follows. Any user can use it; there is no editing here.
  */
 const OVERVIEW_REFRESH_MS = 60000;
 const OVERVIEW_COLLAPSED_KEY = 'lighting-manager-overview-collapsed';
+const OVERVIEW_SCHEDULES_KEY = 'lighting-manager-overview-schedules';
 
 class LightingManagerOverviewCard extends HTMLElement {
   constructor() {
@@ -3311,8 +3308,9 @@ class LightingManagerOverviewCard extends HTMLElement {
     this._nowTiles = [];
     this._nowKey = null;
     this._rooms = [];
-    this._helper = null;
+    this._schedCards = [];
     this._collapsed = this._loadCollapsed();
+    this._schedOpen = this._loadSchedOpen();
   }
 
   setConfig(config) {
@@ -3339,6 +3337,7 @@ class LightingManagerOverviewCard extends HTMLElement {
     }
     for (const tile of this._roomTiles) tile.hass = hass;
     for (const tile of this._nowTiles) tile.hass = hass;
+    for (const card of this._schedCards) card.hass = hass;
     this._updateLive();
   }
 
@@ -3354,7 +3353,6 @@ class LightingManagerOverviewCard extends HTMLElement {
       clearInterval(this._refreshTimer);
       this._refreshTimer = null;
     }
-    if (this._helper && this._helper._closeScheduler) this._helper._closeScheduler();
   }
 
   getCardSize() {
@@ -3411,6 +3409,24 @@ class LightingManagerOverviewCard extends HTMLElement {
       window.localStorage.setItem(OVERVIEW_COLLAPSED_KEY, JSON.stringify([...this._collapsed]));
     } catch (err) {
       /* remembering the folded rooms is a convenience only */
+    }
+  }
+
+  _loadSchedOpen() {
+    try {
+      const raw = window.localStorage.getItem(OVERVIEW_SCHEDULES_KEY);
+      const obj = raw ? JSON.parse(raw) : {};
+      return obj && typeof obj === 'object' ? obj : {};
+    } catch (err) {
+      return {};
+    }
+  }
+
+  _saveSchedOpen() {
+    try {
+      window.localStorage.setItem(OVERVIEW_SCHEDULES_KEY, JSON.stringify(this._schedOpen));
+    } catch (err) {
+      /* remembering this is a convenience only */
     }
   }
 
@@ -3510,11 +3526,14 @@ class LightingManagerOverviewCard extends HTMLElement {
           r =>
             r.areaId + ':' + r.name + '=' +
             r.lights
-              .map(l => `${l.entity_id}:${l.width}:${l.slider ? 's' : ''}:${l.schedules}:${l.schedulable ? '' : 'x'}`)
+              .map(l => `${l.entity_id}:${l.width}:${l.slider ? 's' : ''}:${l.schedulable ? '' : 'x'}`)
               .join(',')
         )
         .join('|');
-    if (this._renderedKey === key) return;
+    if (this._renderedKey === key) {
+      this._updateScheduleCounts(rooms);
+      return;
+    }
 
     const token = ++this._renderToken;
     try {
@@ -3531,6 +3550,7 @@ class LightingManagerOverviewCard extends HTMLElement {
     if (token !== this._renderToken) return;
 
     this._rooms = rooms;
+    this._schedCards = [];
     this._roomTiles = [];
     this._nowTiles = [];
     this._nowKey = null;
@@ -3563,12 +3583,19 @@ class LightingManagerOverviewCard extends HTMLElement {
       .lm-ov-cell { position:relative; min-width:0; }
       .lm-ov-area { font-size:11px; color:var(--secondary-text-color); padding:0 4px 2px;
         overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-      .lm-ov-sched { position:absolute; top:4px; right:6px; z-index:1; display:inline-flex; align-items:center;
-        gap:2px; border:0; border-radius:12px; padding:2px 6px 2px 4px; font:inherit; font-size:11px;
-        cursor:pointer; background:var(--card-background-color); color:var(--secondary-text-color);
-        box-shadow:0 0 0 1px var(--divider-color); opacity:.75; }
-      .lm-ov-sched.has { color:var(--primary-color); opacity:1; }
-      .lm-ov-sched ha-icon { --mdc-icon-size:14px; display:flex; }
+      .lm-ov-cell > lighting-manager-countdown-card { display:block; }
+      .lm-ov-now { border:1px solid var(--divider-color); border-radius:16px; padding:12px;
+        background:color-mix(in srgb, var(--state-light-active-color, var(--primary-color)) 7%, transparent); }
+      .lm-ov-divider { display:flex; align-items:center; gap:12px; margin:4px 0 0;
+        color:var(--secondary-text-color); font-size:12px; letter-spacing:.08em; text-transform:uppercase; }
+      .lm-ov-divider::before, .lm-ov-divider::after { content:''; flex:1; height:1px; background:var(--divider-color); }
+      .lm-ov-room { padding-bottom:4px; }
+      .lm-ov-schedhead { display:flex; align-items:center; gap:8px; width:100%; margin:8px 0 0; padding:8px 4px;
+        border:0; border-top:1px solid var(--divider-color); background:transparent; cursor:pointer;
+        font:inherit; font-size:14px; color:var(--secondary-text-color); text-align:left; }
+      .lm-ov-schedhead ha-icon { --mdc-icon-size:18px; display:flex; }
+      .lm-ov-schedbody { padding:4px 0 8px; }
+      .lm-ov-schedmsg { padding:8px 4px; font-size:13px; color:var(--secondary-text-color); }
       .lm-ov-empty { font-size:13px; color:var(--secondary-text-color); padding:4px 4px 8px; }
     `;
     root.appendChild(style);
@@ -3582,6 +3609,7 @@ class LightingManagerOverviewCard extends HTMLElement {
 
     // On now ---------------------------------------------------------------
     const now = document.createElement('section');
+    now.className = 'lm-ov-now';
     const nowHead = document.createElement('div');
     nowHead.className = 'lm-ov-head';
     const nowTitle = document.createElement('div');
@@ -3610,6 +3638,12 @@ class LightingManagerOverviewCard extends HTMLElement {
     now.appendChild(this._nowEmpty);
     root.appendChild(now);
 
+    // Divider between "On now" and the full list ---------------------------------
+    const divider = document.createElement('div');
+    divider.className = 'lm-ov-divider';
+    divider.textContent = 'All lights by room';
+    root.appendChild(divider);
+
     // Rooms ------------------------------------------------------------------
     this._roomRefs = [];
     for (const room of rooms) {
@@ -3618,12 +3652,14 @@ class LightingManagerOverviewCard extends HTMLElement {
 
     this.innerHTML = '';
     this.appendChild(root);
+    this._updateScheduleCounts(rooms);
     this._ready = true;
     this._updateLive();
   }
 
   _buildRoom(room) {
     const section = document.createElement('section');
+    section.className = 'lm-ov-room';
     const collapseKey = room.areaId || '__none__';
 
     const head = document.createElement('div');
@@ -3634,7 +3670,7 @@ class LightingManagerOverviewCard extends HTMLElement {
     const area = this._hass?.areas?.[room.areaId];
     const chevron = document.createElement('ha-icon');
     const icon = document.createElement('ha-icon');
-    icon.setAttribute('icon', area?.icon || 'mdi:lightbulb-group-outline');
+    icon.setAttribute('icon', area?.icon || 'mdi:lightbulb-outline');
     const name = document.createElement('span');
     name.className = 'lm-ov-room-name';
     name.textContent = room.name;
@@ -3663,30 +3699,63 @@ class LightingManagerOverviewCard extends HTMLElement {
       const tile = this._makeTile(light.entity_id, light.slider);
       this._roomTiles.push(tile);
       cell.appendChild(tile);
-      if (this.config.show_schedules && light.schedulable) {
-        const btn = document.createElement('button');
-        btn.type = 'button';
-        btn.className = 'lm-ov-sched' + (light.schedules > 0 ? ' has' : '');
-        btn.setAttribute('aria-label', `Schedules for ${this._lightName(light)}`);
-        btn.title =
-          light.schedules > 0
-            ? `${light.schedules} schedule${light.schedules === 1 ? '' : 's'} - tap to view or edit`
-            : 'No schedules - tap to add one';
-        btn.innerHTML =
-          '<ha-icon icon="mdi:clock-outline"></ha-icon>' + (light.schedules > 0 ? `<span>${light.schedules}</span>` : '');
-        btn.addEventListener('click', ev => {
-          ev.stopPropagation();
-          this._openSchedules(light);
-        });
-        cell.appendChild(btn);
-      }
       grid.appendChild(cell);
     }
     section.appendChild(grid);
 
+    // Schedules row: Niels Faber's Scheduler Card for this room's lights.
+    const schedulable = room.lights.filter(l => l.schedulable).map(l => l.entity_id);
+    let schedChip = null;
+    let schedBody = null;
+    let schedHead = null;
+    let applySched = () => {};
+    if (this.config.show_schedules && schedulable.length) {
+      schedHead = document.createElement('button');
+      schedHead.type = 'button';
+      schedHead.className = 'lm-ov-schedhead';
+      const schedChev = document.createElement('ha-icon');
+      const schedIcon = document.createElement('ha-icon');
+      schedIcon.setAttribute('icon', 'mdi:calendar-clock-outline');
+      const schedLabel = document.createElement('span');
+      schedLabel.textContent = 'Schedules';
+      schedChip = document.createElement('span');
+      schedChip.className = 'lm-ov-chip';
+      schedHead.append(schedChev, schedIcon, schedLabel, schedChip);
+      schedBody = document.createElement('div');
+      schedBody.className = 'lm-ov-schedbody';
+      section.append(schedHead, schedBody);
+
+      const isOpen = () => {
+        const saved = this._schedOpen[collapseKey];
+        if (typeof saved === 'boolean') return saved;
+        return room.lights.some(l => l.schedulable && l.schedules > 0);
+      };
+      applySched = () => {
+        const open = isOpen();
+        schedBody.hidden = !open;
+        schedChev.setAttribute('icon', open ? 'mdi:chevron-down' : 'mdi:chevron-right');
+        schedHead.setAttribute('aria-expanded', String(open));
+        if (open && !schedBody.dataset.built) {
+          schedBody.dataset.built = '1';
+          this._buildSchedulerCard(schedBody, schedulable);
+        }
+      };
+      schedHead.addEventListener('click', () => {
+        this._schedOpen[collapseKey] = !isOpen();
+        this._saveSchedOpen();
+        applySched();
+      });
+      applySched();
+    }
+
     const applyCollapsed = () => {
       const folded = this._collapsed.has(collapseKey);
       grid.hidden = folded;
+      if (schedHead) schedHead.hidden = folded;
+      if (schedBody) {
+        if (folded) schedBody.hidden = true;
+        else applySched();
+      }
       chevron.setAttribute('icon', folded ? 'mdi:chevron-right' : 'mdi:chevron-down');
       main.setAttribute('aria-expanded', String(!folded));
     };
@@ -3698,7 +3767,7 @@ class LightingManagerOverviewCard extends HTMLElement {
     });
     applyCollapsed();
 
-    this._roomRefs.push({ ids, chip, offBtn, onBtn });
+    this._roomRefs.push({ ids, chip, offBtn, onBtn, schedChip, areaKey: room.areaId, lights: room.lights });
     return section;
   }
 
@@ -3783,20 +3852,47 @@ class LightingManagerOverviewCard extends HTMLElement {
     );
   }
 
-  async _openSchedules(light) {
+  async _buildSchedulerCard(body, entities) {
+    body.innerHTML = '<div class="lm-ov-schedmsg">Loading schedules…</div>';
     try {
-      await Promise.race([
-        customElements.whenDefined('light-scheduler-list-card'),
-        new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 5000))
-      ]);
-      if (!this._helper) this._helper = document.createElement('light-scheduler-list-card');
-      await this._helper.openSchedulerDialog(
-        this._hass,
-        `${this._lightName(light)} schedules`,
-        [light.entity_id]
-      );
+      const helpers = window.loadCardHelpers ? await window.loadCardHelpers() : null;
+      if (!helpers) throw new Error('Home Assistant card helpers are not available.');
+      const card = await helpers.createCardElement({
+        type: 'custom:scheduler-card',
+        title: false,
+        include: entities,
+        discover_existing: false,
+        show_header_toggle: false,
+        show_toggle_switches: true,
+        show_add_button: true,
+        display_options: {
+          primary_info: ['{entity}: {action}'],
+          secondary_info: ['days', 'time']
+        },
+        sort_by: ['relative-time', 'state']
+      });
+      if (this._hass) card.hass = this._hass;
+      body.innerHTML = '';
+      body.appendChild(card);
+      this._schedCards.push(card);
     } catch (err) {
-      console.error('Lighting Manager overview: could not open the schedule dialog', err);
+      body.innerHTML = '';
+      const msg = document.createElement('div');
+      msg.className = 'lm-ov-schedmsg';
+      msg.style.color = 'var(--error-color)';
+      msg.textContent = `Could not open the Scheduler Card - is it installed? (${err?.message || err})`;
+      body.appendChild(msg);
+    }
+  }
+
+  _updateScheduleCounts(rooms) {
+    const byArea = new Map((rooms || []).map(r => [r.areaId, r]));
+    for (const ref of this._roomRefs || []) {
+      if (!ref.schedChip) continue;
+      const room = byArea.get(ref.areaKey);
+      const n = room ? room.lights.filter(l => l.schedulable && l.schedules > 0).length : 0;
+      ref.schedChip.textContent = n > 0 ? `${n} scheduled` : 'none';
+      ref.schedChip.classList.toggle('on', n > 0);
     }
   }
 }
@@ -3816,7 +3912,7 @@ if (!window.customCards.some(x => x.type === 'lighting-manager-overview-card')) 
 }
 
 console.info(
-  '%c LIGHTING-MANAGER-OVERVIEW-CARD %c v1.0.0 ',
+  '%c LIGHTING-MANAGER-OVERVIEW-CARD %c v1.1.0 ',
   'color: white; background: #03a9f4; font-weight: 700;',
   'color: #03a9f4; background: white; font-weight: 700;'
 );
