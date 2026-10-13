@@ -149,7 +149,7 @@ async def _async_register_panel(hass: HomeAssistant) -> None:
         webcomponent_name="lighting-manager-panel",
         frontend_url_path=PANEL_URL,
         module_url=f"{PANEL_JS_MODULE}?v={_file_version(static_path)}",
-        sidebar_title="Lighting",
+        sidebar_title="Lighting Manager",
         sidebar_icon="mdi:lightbulb-group",
         require_admin=False,
         embed_iframe=False,
