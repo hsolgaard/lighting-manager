@@ -1,5 +1,5 @@
 /**
- * Lighting Manager Overview Card  v1.3.0
+ * Lighting Manager Overview Card  v1.4.0
  * (PRD Revision - Lighting-Aware Dashboard Automation, section 4.8.)
  *
  * One card, a whole lighting page:
@@ -266,7 +266,7 @@ class LightingManagerOverviewCard extends HTMLElement {
     root.className = 'lm-ov';
     const style = document.createElement('style');
     style.textContent = `
-      .lm-ov { display:flex; flex-direction:column; gap:20px; }
+      .lm-ov { display:flex; flex-direction:column; gap:16px; }
       .lm-ov-title { font-size:20px; font-weight:500; margin:0; padding:0 2px; }
       .lm-ov-head { display:flex; align-items:center; gap:8px; margin:0 0 8px; min-height:36px; }
       .lm-ov-head-main { display:flex; align-items:center; gap:8px; flex:1; min-width:0;
@@ -292,8 +292,8 @@ class LightingManagerOverviewCard extends HTMLElement {
       .lm-ov-divider { display:flex; align-items:center; gap:12px; margin:4px 0 0;
         color:var(--secondary-text-color); font-size:12px; letter-spacing:.08em; text-transform:uppercase; }
       .lm-ov-divider::before, .lm-ov-divider::after { content:''; flex:1; height:1px; background:var(--divider-color); }
-      .lm-ov-room { padding-bottom:4px; }
-      .lm-ov-schedhead { display:flex; align-items:center; gap:8px; width:100%; margin:8px 0 0; padding:8px 4px;
+      .lm-ov-room { border:1px solid var(--divider-color); border-radius:16px; padding:12px 12px 4px; }
+      .lm-ov-schedhead { display:flex; align-items:center; gap:8px; width:100%; margin:10px 0 0; padding:8px 4px;
         border:0; border-top:1px solid var(--divider-color); background:transparent; cursor:pointer;
         font:inherit; font-size:14px; color:var(--secondary-text-color); text-align:left; }
       .lm-ov-schedhead ha-icon { --mdc-icon-size:18px; display:flex; }
