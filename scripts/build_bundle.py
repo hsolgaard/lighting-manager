@@ -23,7 +23,12 @@ SOURCES = (
     "lighting-manager-room-card.js",
 )
 
-GUARD_KEY = "__lightingManagerCardsLoaded"
+TAGS = (
+    "lighting-manager-countdown-card",
+    "light-scheduler-list-card",
+    "lighting-manager-scheduler-card",
+    "lighting-manager-room-card",
+)
 
 
 def build() -> str:
@@ -33,15 +38,28 @@ def build() -> str:
         " * Source: the individual *-card.js files in this folder;\n"
         " * rebuild with: python3 scripts/build_bundle.py\n"
         " * Loading it more than once (as a Lovelace resource AND by the\n"
-        " * integration) is harmless: only the first load runs.\n"
+        " * integration) is harmless: every card only defines itself if its\n"
+        " * element name is not already defined. Each card loads in its own\n"
+        " * protected section, so one failure cannot stop the others, and the\n"
+        " * last line reports which cards ended up defined.\n"
         " */\n"
-        f"if (!window.{GUARD_KEY}) {{\n"
-        f"window.{GUARD_KEY} = true;\n"
     ]
     for name in SOURCES:
         source = (FRONTEND / name).read_text(encoding="utf-8").rstrip("\n")
-        parts.append(f"\n/* ===== {name} ===== */\n{{\n{source}\n}}\n")
-    parts.append("}\n")
+        parts.append(
+            f"\n/* ===== {name} ===== */\n"
+            "try {\n{\n"
+            f"{source}\n"
+            "}\n} catch (error) {\n"
+            f"  console.error('Lighting Manager: {name} failed to load:', error);\n"
+            "}\n"
+        )
+    tags = ", ".join(f"'{t}'" for t in TAGS)
+    parts.append(
+        "\n/* ===== load report ===== */\n"
+        f"console.info('LIGHTING-MANAGER-CARDS bundle ran:', [{tags}]"
+        ".map(n => n + (customElements.get(n) ? ' ok' : ' MISSING')).join(', '));\n"
+    )
     return "".join(parts)
 
 

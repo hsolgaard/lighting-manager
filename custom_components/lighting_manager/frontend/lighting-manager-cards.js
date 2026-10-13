@@ -3,12 +3,14 @@
  * Source: the individual *-card.js files in this folder;
  * rebuild with: python3 scripts/build_bundle.py
  * Loading it more than once (as a Lovelace resource AND by the
- * integration) is harmless: only the first load runs.
+ * integration) is harmless: every card only defines itself if its
+ * element name is not already defined. Each card loads in its own
+ * protected section, so one failure cannot stop the others, and the
+ * last line reports which cards ended up defined.
  */
-if (!window.__lightingManagerCardsLoaded) {
-window.__lightingManagerCardsLoaded = true;
 
 /* ===== lighting-manager-countdown-card.js ===== */
+try {
 {
 /**
  * Lighting Manager countdown card  v2.0.0
@@ -443,8 +445,12 @@ console.info(
   'color: #03a9f4; background: white; font-weight: 700;'
 );
 }
+} catch (error) {
+  console.error('Lighting Manager: lighting-manager-countdown-card.js failed to load:', error);
+}
 
 /* ===== light-scheduler-list-card.js ===== */
+try {
 {
 class LightSchedulerListCard extends HTMLElement {
   constructor() {
@@ -2417,8 +2423,12 @@ console.info(
   'color: #03a9f4; background: white; font-weight: 700;'
 );
 }
+} catch (error) {
+  console.error('Lighting Manager: light-scheduler-list-card.js failed to load:', error);
+}
 
 /* ===== lighting-manager-scheduler-card.js ===== */
+try {
 {
 /**
  * Lighting Manager Scheduler Card  v1.1.0
@@ -2640,8 +2650,12 @@ console.info(
   'color: #03a9f4; background: white; font-weight: 700;'
 );
 }
+} catch (error) {
+  console.error('Lighting Manager: lighting-manager-scheduler-card.js failed to load:', error);
+}
 
 /* ===== lighting-manager-room-card.js ===== */
+try {
 {
 /**
  * Lighting Manager Room Card  v1.0.0
@@ -2893,4 +2907,9 @@ console.info(
   'color: #03a9f4; background: white; font-weight: 700;'
 );
 }
+} catch (error) {
+  console.error('Lighting Manager: lighting-manager-room-card.js failed to load:', error);
 }
+
+/* ===== load report ===== */
+console.info('LIGHTING-MANAGER-CARDS bundle ran:', ['lighting-manager-countdown-card', 'light-scheduler-list-card', 'lighting-manager-scheduler-card', 'lighting-manager-room-card'].map(n => n + (customElements.get(n) ? ' ok' : ' MISSING')).join(', '));
