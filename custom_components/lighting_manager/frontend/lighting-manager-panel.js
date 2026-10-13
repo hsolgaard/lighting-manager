@@ -106,6 +106,8 @@ const REFRESH_INTERVAL_MS = 15000;
 // every call site to remember to pass one.
 const ACTION_SUCCESS_MESSAGES = {
   adopt_light: "Light adopted",
+  set_icon: "Icon updated",
+  set_area_light_order: "Order saved - the dashboard room card follows it",
   ignore_light: "Light ignored",
   unignore_light: "Light un-ignored — back in the Inbox",
   rename_light: "Name updated",
@@ -389,12 +391,36 @@ const CSS_TEXT = `
     background: var(--card-background-color);
     color: var(--primary-text-color);
   }
-`;
+  .lm-area-filter { min-width: 130px; max-width: 200px; }
+  .lm-room { margin-bottom: 24px; }
+  .lm-room-head { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+  .lm-room-head h3 { font-size: 1.05em; margin: 0 8px 0 0; }
+  .lm-badge-warn { background: var(--warning-color, #ffa726); color: #fff; }
+  .lm-badge-on { background: var(--state-light-active-color, var(--primary-color)); color: #fff; }
+  .lm-room-list { border: 1px solid var(--divider-color); border-radius: 8px; overflow: hidden; background: var(--card-background-color); }
+  .lm-room-row { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-bottom: 1px solid var(--divider-color); cursor: pointer; min-height: 40px; }
+  .lm-room-row:last-child { border-bottom: none; }
+  .lm-room-row:hover { background: var(--secondary-background-color); }
+  .lm-room-row.selected { background: var(--secondary-background-color); box-shadow: inset 3px 0 0 var(--primary-color); }
+  .lm-room-arrows { display: flex; flex-direction: column; width: 22px; flex: none; }
+  .lm-arrow-btn { font-size: 0.65em; line-height: 1.2; padding: 0 4px; border: none; background: transparent; color: var(--secondary-text-color); cursor: pointer; }
+  .lm-arrow-btn:hover:not(:disabled) { color: var(--primary-color); }
+  .lm-arrow-btn:disabled { opacity: 0.25; cursor: default; }
+  .lm-room-icon, .lm-icon-preview { --mdc-icon-size: 20px; color: var(--secondary-text-color); flex: none; }
+  .lm-room-name { flex: 1; min-width: 0; font-weight: 500; word-break: break-word; }
+  .lm-room-meta { display: flex; flex-wrap: wrap; gap: 4px; justify-content: flex-end; }
+  .lm-hint-link { display: inline-block; margin-top: 4px; font-size: 0.85em; }
+  @media (max-width: 600px) {
+    .lm-room-row { flex-wrap: wrap; }
+    .lm-room-meta { justify-content: flex-start; flex-basis: 100%; padding-left: 30px; }
+  }`;
 
 class LightingManagerPanel extends HTMLElement {
   constructor() {
     super();
-    this._view = "table"; // "table" | "inbox" | "dashboard"
+    this._view = "table"; // "table" | "rooms" | "inbox" | "dashboard"
+    this._areaFilter = ""; // "" = all rooms, "__none__" = lights with no area, else an area_id
+    this._areaFilterSignature = null;
     this._lights = [];
     this._inbox = [];
     this._lightsById = new Map();
@@ -586,6 +612,9 @@ class LightingManagerPanel extends HTMLElement {
     tabs.className = "lm-tabs";
     this._tabButtons = {
       table: this._makeTabButton("Table", "table"),
+      // One section per room (PRD §4.7 step 2): the Table answers "which
+      // light is this", this answers "what is going on in this room".
+      rooms: this._makeTabButton("Rooms", "rooms"),
       inbox: this._makeTabButton("Inbox", "inbox"),
       // Per-room quick-control surface (2026-09-15, Hans's pick for "what's
       // next" - PRD §22). Deliberately separate from Table/Inbox: those are
@@ -595,14 +624,30 @@ class LightingManagerPanel extends HTMLElement {
       // workflow that was replacing Simple Timer, not a management task.
       dashboard: this._makeTabButton("Dashboard", "dashboard"),
     };
-    tabs.append(this._tabButtons.table, this._tabButtons.inbox, this._tabButtons.dashboard);
+    tabs.append(
+      this._tabButtons.table,
+      this._tabButtons.rooms,
+      this._tabButtons.inbox,
+      this._tabButtons.dashboard
+    );
     toolbar.appendChild(tabs);
 
     const spacer = document.createElement("div");
     spacer.className = "lm-spacer";
     toolbar.appendChild(spacer);
 
-    // Show-ignored toggle: Table-view only. Added 2026-09-14 - ignoring a
+    // Room selector (PRD §4.7 step 1): narrows Table, Rooms, Inbox and
+    // Dashboard to one room. Options are filled in by _syncAreaFilter().
+    this._areaFilterSelect = document.createElement("select");
+    this._areaFilterSelect.className = "lm-filter lm-area-filter";
+    this._areaFilterSelect.title = "Show only one room";
+    this._areaFilterSelect.addEventListener("change", () => {
+      this._areaFilter = this._areaFilterSelect.value;
+      this._renderView();
+    });
+    toolbar.appendChild(this._areaFilterSelect);
+
+    // Show-ignored toggle: Table and Rooms views. Added 2026-09-14 - ignoring a
     // light previously left it sitting in the table forever with no way
     // to tell it had been dealt with; it now disappears by default but
     // stays reachable here for un-ignoring later.
@@ -684,7 +729,7 @@ class LightingManagerPanel extends HTMLElement {
     // "Show ignored" only makes sense on the Table view - ignored lights
     // never appear in the Inbox regardless (they're steady-state, not
     // something needing attention).
-    this._showIgnoredWrap.hidden = this._view !== "table";
+    this._showIgnoredWrap.hidden = this._view !== "table" && this._view !== "rooms";
     // ha-data-table has its own built-in search box (visible once rows
     // are rendered into it); the toolbar filter next to it was a second,
     // confusingly-duplicate search box on the Table view (2026-09-14
@@ -715,8 +760,11 @@ class LightingManagerPanel extends HTMLElement {
   }
 
   _renderView() {
+    this._syncAreaFilter();
     if (this._view === "table") {
       this._renderTable();
+    } else if (this._view === "rooms") {
+      this._renderRooms();
     } else if (this._view === "inbox") {
       this._renderInbox();
     } else {
@@ -726,7 +774,49 @@ class LightingManagerPanel extends HTMLElement {
 
   // -- Table view --------------------------------------------------------
 
+  // Room selector helpers -------------------------------------------------
+
+  _matchesAreaFilter(light) {
+    if (!this._areaFilter) return true;
+    if (this._areaFilter === "__none__") return !light.area_id;
+    return light.area_id === this._areaFilter;
+  }
+
+  _syncAreaFilter() {
+    // Offer only rooms that contain at least one light, so the list stays
+    // short. Rebuilt only when it changes: the panel re-renders every 15s
+    // and replacing the options would close the dropdown while it is open.
+    const areaIds = new Set();
+    let anyUnassigned = false;
+    for (const l of this._lights) {
+      if (l.area_id) areaIds.add(l.area_id);
+      else anyUnassigned = true;
+    }
+    const areas = [...areaIds]
+      .map((id) => [id, this._areaName(id)])
+      .sort((a, b) => a[1].localeCompare(b[1]));
+    const signature = JSON.stringify([areas, anyUnassigned]);
+    if (signature !== this._areaFilterSignature) {
+      this._areaFilterSignature = signature;
+      const select = this._areaFilterSelect;
+      select.innerHTML = "";
+      const add = (value, label) => {
+        const opt = document.createElement("option");
+        opt.value = value;
+        opt.textContent = label;
+        select.appendChild(opt);
+      };
+      add("", "All rooms");
+      for (const [id, name] of areas) add(id, name);
+      if (anyUnassigned) add("__none__", "No area");
+    }
+    const valid = [...this._areaFilterSelect.options].some((o) => o.value === this._areaFilter);
+    if (!valid) this._areaFilter = "";
+    this._areaFilterSelect.value = this._areaFilter;
+  }
+
   _applyFilter(lights) {
+    lights = lights.filter((l) => this._matchesAreaFilter(l));
     if (!this._filterText) return lights;
     const needle = this._filterText;
     return lights.filter((l) => {
@@ -898,6 +988,183 @@ class LightingManagerPanel extends HTMLElement {
     }
     table.appendChild(tbody);
     this._bodyEl.appendChild(table);
+  }
+
+  // -- Rooms view (PRD §4.7 step 2) -----------------------------------------
+  //
+  // One section per room, listing every light the room holds - adopted or
+  // not - with the things you want to see at a glance: state, type,
+  // schedules and badges for anything that needs attention. Click a light
+  // to open the same drawer as in the Table. Within a room, the adopted
+  // lights are in the order the dashboard room card shows them; the arrows
+  // change that order (the same saved order as the card's own Reorder).
+
+  _roomLightsInDashboardOrder(areaId, lights) {
+    return lights
+      .filter((l) => l.area_id === areaId && l.adopted && !l.ignored)
+      .sort((a, b) => {
+        const ia = a.area_order === null || a.area_order === undefined ? Infinity : a.area_order;
+        const ib = b.area_order === null || b.area_order === undefined ? Infinity : b.area_order;
+        if (ia !== ib) return ia < ib ? -1 : 1;
+        return a.name.localeCompare(b.name);
+      });
+  }
+
+  _renderRooms() {
+    this._bodyEl.innerHTML = "";
+    const visible = this._showIgnored ? this._lights : this._lights.filter((l) => !l.ignored);
+    const lights = this._applyFilter(visible);
+
+    if (lights.length === 0) {
+      const empty = document.createElement("div");
+      empty.className = "lm-empty";
+      empty.textContent = visible.length === 0
+        ? "No lights found yet."
+        : "No lights match your filter.";
+      this._bodyEl.appendChild(empty);
+      return;
+    }
+
+    const byArea = new Map();
+    for (const light of lights) {
+      const key = light.area_id || "";
+      if (!byArea.has(key)) byArea.set(key, []);
+      byArea.get(key).push(light);
+    }
+    const areaKeys = [...byArea.keys()].sort((a, b) => {
+      if (a === "") return 1;
+      if (b === "") return -1;
+      return this._areaName(a).localeCompare(this._areaName(b));
+    });
+
+    for (const areaKey of areaKeys) {
+      this._bodyEl.appendChild(this._renderRoomSection(areaKey, byArea.get(areaKey)));
+    }
+  }
+
+  _renderRoomSection(areaKey, roomLights) {
+    const section = document.createElement("div");
+    section.className = "lm-room";
+
+    const head = document.createElement("div");
+    head.className = "lm-room-head";
+    const title = document.createElement("h3");
+    title.textContent = areaKey ? this._areaName(areaKey) : "No area";
+    head.appendChild(title);
+
+    const count = (fn) => roomLights.filter(fn).length;
+    const chips = [
+      [`${roomLights.length} light${roomLights.length === 1 ? "" : "s"}`, ""],
+    ];
+    const notAdopted = count((l) => !l.adopted && !l.ignored);
+    const mismatch = count((l) => l.area_mismatch);
+    const unavailable = count((l) => l.status === "unavailable");
+    const offDash = count((l) => l.adopted && !l.ignored && !l.dashboard_included);
+    if (notAdopted) chips.push([`${notAdopted} not adopted`, "warn"]);
+    if (mismatch) chips.push([`${mismatch} area mismatch`, "warn"]);
+    if (unavailable) chips.push([`${unavailable} unavailable`, "warn"]);
+    if (offDash) chips.push([`${offDash} off dashboard`, ""]);
+    for (const [text, kind] of chips) {
+      const chip = document.createElement("span");
+      chip.className = kind ? `lm-badge lm-badge-${kind}` : "lm-badge";
+      chip.textContent = text;
+      head.appendChild(chip);
+    }
+    section.appendChild(head);
+
+    // Adopted lights first, in dashboard order; everything else after,
+    // alphabetically.
+    const ordered = areaKey
+      ? this._roomLightsInDashboardOrder(areaKey, roomLights)
+      : [];
+    const orderedIds = new Set(ordered.map((l) => l.entity_id));
+    const rest = roomLights
+      .filter((l) => !orderedIds.has(l.entity_id))
+      .sort((a, b) => a.name.localeCompare(b.name));
+    const rows = areaKey ? [...ordered, ...rest] : rest.length ? rest : roomLights;
+
+    // Arrows reorder the dashboard order. They are hidden while a text
+    // filter is active, because a filtered list is not the whole room.
+    const canReorder = Boolean(areaKey) && !this._filterText;
+    const fullOrder = areaKey
+      ? this._roomLightsInDashboardOrder(areaKey, this._lights).map((l) => l.entity_id)
+      : [];
+
+    const list = document.createElement("div");
+    list.className = "lm-room-list";
+    for (const light of rows) {
+      list.appendChild(this._renderRoomRow(light, areaKey, canReorder, fullOrder));
+    }
+    section.appendChild(list);
+    return section;
+  }
+
+  _renderRoomRow(light, areaKey, canReorder, fullOrder) {
+    const row = document.createElement("div");
+    row.className = "lm-room-row";
+    if (light.entity_id === this._selectedEntityId) row.classList.add("selected");
+    row.addEventListener("click", () => this._selectEntity(light.entity_id));
+
+    const arrows = document.createElement("div");
+    arrows.className = "lm-room-arrows";
+    const pos = fullOrder.indexOf(light.entity_id);
+    if (canReorder && pos !== -1 && fullOrder.length > 1) {
+      const move = (delta) => async (ev) => {
+        ev.stopPropagation();
+        const next = fullOrder.slice();
+        const target = pos + delta;
+        if (target < 0 || target >= next.length) return;
+        [next[pos], next[target]] = [next[target], next[pos]];
+        await this._callAction("set_area_light_order", { area_id: areaKey, entity_ids: next });
+      };
+      for (const [label, delta, title] of [["▲", -1, "Move up"], ["▼", 1, "Move down"]]) {
+        const btn = document.createElement("button");
+        btn.className = "lm-arrow-btn";
+        btn.textContent = label;
+        btn.title = `${title} (order on the dashboard)`;
+        btn.setAttribute("aria-label", `${title}: ${light.name}`);
+        btn.disabled = pos + delta < 0 || pos + delta >= fullOrder.length;
+        btn.addEventListener("click", move(delta));
+        arrows.appendChild(btn);
+      }
+    }
+    row.appendChild(arrows);
+
+    if (customElements.get("ha-icon") && light.icon) {
+      const icon = document.createElement("ha-icon");
+      icon.setAttribute("icon", light.icon);
+      icon.className = "lm-room-icon";
+      row.appendChild(icon);
+    }
+
+    const name = document.createElement("div");
+    name.className = "lm-room-name";
+    name.textContent = light.name;
+    row.appendChild(name);
+
+    const meta = document.createElement("div");
+    meta.className = "lm-room-meta";
+    const addBadge = (text, kind) => {
+      const b = document.createElement("span");
+      b.className = kind ? `lm-badge lm-badge-${kind}` : "lm-badge";
+      b.textContent = text;
+      meta.appendChild(b);
+    };
+    addBadge(light.state === "on" ? "On" : light.state === "off" ? "Off" : light.state, light.state === "on" ? "on" : "");
+    if (light.light_type) addBadge(LIGHT_TYPE_LABELS[light.light_type] || light.light_type, "");
+    if (light.schedule_count > 0) {
+      addBadge(`${light.schedule_count} schedule${light.schedule_count === 1 ? "" : "s"}`, "");
+    }
+    if (light.countdown_remaining_seconds !== null && light.countdown_remaining_seconds !== undefined) {
+      addBadge(`Off in ${this._formatCountdown(light.countdown_remaining_seconds)}`, "");
+    }
+    if (light.ignored) addBadge("Ignored", "");
+    else if (!light.adopted) addBadge("Not adopted", "warn");
+    if (light.area_mismatch) addBadge("Area mismatch", "warn");
+    if (light.status === "unavailable") addBadge("Unavailable", "warn");
+    if (light.adopted && !light.ignored && !light.dashboard_included) addBadge("Off dashboard", "");
+    row.appendChild(meta);
+    return row;
   }
 
   // -- Dashboard view (per-room quick control, PRD §22) -------------------
@@ -1073,6 +1340,10 @@ class LightingManagerPanel extends HTMLElement {
     // typing into it while on the Inbox silently did nothing
     // (2026-09-14 feedback: the Inbox needs area shown *and* to actually
     // be filterable, since it's often the longer of the two lists).
+    items = items.filter((item) => {
+      const light = this._lightsById.get(item.entity_id);
+      return !light || this._matchesAreaFilter(light);
+    });
     if (!this._filterText) return items;
     const needle = this._filterText;
     return items.filter((item) => {
@@ -1295,6 +1566,8 @@ class LightingManagerPanel extends HTMLElement {
     // concept here, which is fine - it's a nice-to-have, not load-bearing).
     if (this._view === "table" && !customElements.get("ha-data-table")) {
       this._renderTable();
+    } else if (this._view === "rooms") {
+      this._renderRooms();
     }
   }
 
@@ -1305,6 +1578,8 @@ class LightingManagerPanel extends HTMLElement {
     this._renderDetail(null);
     if (this._view === "table" && !customElements.get("ha-data-table")) {
       this._renderTable();
+    } else if (this._view === "rooms") {
+      this._renderRooms();
     }
   }
 
@@ -1371,6 +1646,12 @@ class LightingManagerPanel extends HTMLElement {
     );
     this._nameInput = nameField.input;
     this._detailEl.appendChild(nameField.row);
+
+    // -- Icon field --
+    // The entity registry's own icon, i.e. the same "Icon" box as in Home
+    // Assistant's entity settings, so every tile (the room card included)
+    // shows it. Empty means the integration's default icon.
+    this._detailEl.appendChild(this._makeIconFieldRow(light));
 
     // -- Link to Home Assistant's own settings for this light (new tab) --
     // Home Assistant has no address that opens a single entity's settings
@@ -1655,6 +1936,81 @@ class LightingManagerPanel extends HTMLElement {
     return { row, input };
   }
 
+  _makeIconFieldRow(light) {
+    const row = document.createElement("div");
+    row.className = "lm-field";
+    const label = document.createElement("label");
+    label.textContent = "Icon";
+    row.appendChild(label);
+
+    const inputRow = document.createElement("div");
+    inputRow.className = "lm-field-row";
+
+    let getValue;
+    const markDirty = () => { this._detailDirty = true; };
+    if (customElements.get("ha-icon-picker")) {
+      // HA's own icon picker (searchable list with previews).
+      const picker = document.createElement("ha-icon-picker");
+      picker.hass = this._hass;
+      picker.value = light.icon || "";
+      picker.addEventListener("value-changed", (ev) => {
+        picker.value = ev.detail.value || "";
+        markDirty();
+      });
+      inputRow.appendChild(picker);
+      getValue = () => (picker.value || "").trim();
+    } else {
+      // The picker is not loaded in every Home Assistant build, so fall back
+      // to typing the name (e.g. mdi:ceiling-light) with a live preview.
+      const input = document.createElement("input");
+      input.type = "text";
+      input.placeholder = "mdi:ceiling-light";
+      input.value = light.icon || "";
+      input.setAttribute("autocapitalize", "off");
+      input.setAttribute("autocomplete", "off");
+      const preview = document.createElement("ha-icon");
+      preview.className = "lm-icon-preview";
+      const updatePreview = () => {
+        const value = input.value.trim();
+        if (value) preview.setAttribute("icon", value);
+        else preview.removeAttribute("icon");
+      };
+      updatePreview();
+      input.addEventListener("input", () => { markDirty(); updatePreview(); });
+      inputRow.append(preview, input);
+      getValue = () => input.value.trim();
+    }
+
+    inputRow.appendChild(
+      this._makeButton("Set icon", async () => {
+        const value = getValue();
+        if (value && !/^[a-z0-9_]+:[a-z0-9_-]+$/.test(value)) {
+          this._showError('An icon looks like "mdi:ceiling-light" (a prefix, a colon, then the name).');
+          return;
+        }
+        await this._callAction("set_icon", { entity_id: light.entity_id, icon: value || null });
+      })
+    );
+    if (light.icon) {
+      inputRow.appendChild(
+        this._makeButton("Reset", async () => {
+          await this._callAction("set_icon", { entity_id: light.entity_id, icon: null });
+        })
+      );
+    }
+    row.appendChild(inputRow);
+
+    const hint = document.createElement("a");
+    hint.className = "lm-link lm-hint-link";
+    hint.href = "https://pictogrammers.com/library/mdi/";
+    hint.target = "_blank";
+    hint.rel = "noopener noreferrer";
+    hint.textContent = "Browse icon names ↗";
+    hint.title = "Opens the Material Design Icons list in a new tab. Use the name with the prefix mdi:, e.g. mdi:ceiling-light.";
+    row.appendChild(hint);
+    return row;
+  }
+
   _makeAreaFieldRow(light) {
     const row = document.createElement("div");
     row.className = "lm-field";
@@ -1780,4 +2136,4 @@ class LightingManagerPanel extends HTMLElement {
 
 customElements.define("lighting-manager-panel", LightingManagerPanel);
 
-console.info("%c LIGHTING-MANAGER-PANEL %c table: pinned fixed-size, internal scroll ", "color:white;background:#03a9f4;font-weight:700;", "color:#03a9f4;background:white;font-weight:700;");
+console.info("%c LIGHTING-MANAGER-PANEL %c table: room filter, Rooms view, icon editing ", "color:white;background:#03a9f4;font-weight:700;", "color:#03a9f4;background:white;font-weight:700;");

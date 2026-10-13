@@ -134,6 +134,27 @@ async def async_rename_entity(
     registry.async_update_entity(entity_id, name=name)
 
 
+async def async_set_entity_icon(
+    hass: HomeAssistant, entity_id: str, icon: str | None
+) -> None:
+    """Set (or clear, with icon=None) the entity registry's icon override.
+
+    This is the same field as the "Icon" box in Home Assistant's own entity
+    settings, so every tile (including the room card, which wraps the native
+    tile) picks it up. Clearing it falls back to the integration's default.
+    """
+    registry = er.async_get(hass)
+    if registry.async_get(entity_id) is None:
+        raise ValueError(f"{entity_id} has no entity registry entry, so its icon cannot be set")
+    registry.async_update_entity(entity_id, icon=icon)
+
+
+def async_get_icon_override(hass: HomeAssistant, entity_id: str) -> str | None:
+    """The icon the user has set in the entity registry, or None for the default."""
+    entry = er.async_get(hass).async_get(entity_id)
+    return entry.icon if entry is not None else None
+
+
 # --- Light-type taxonomy via HA Labels (PRD §15) ----------------------------
 #
 # Open technical investigation #2 (PRD §38): "determine the cleanest

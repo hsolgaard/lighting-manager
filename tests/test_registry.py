@@ -279,3 +279,25 @@ async def test_device_id_is_none_without_a_device(hass: HomeAssistant) -> None:
 
     assert registry.async_get_device_id(hass, entry.entity_id) is None
     assert registry.async_get_device_id(hass, "light.not_in_registry") is None
+
+
+async def test_set_entity_icon_sets_and_clears_the_registry_override(hass: HomeAssistant) -> None:
+    entity_registry = er.async_get(hass)
+    entry = entity_registry.async_get_or_create("light", "test_platform", "icon-test")
+    assert registry.async_get_icon_override(hass, entry.entity_id) is None
+
+    await registry.async_set_entity_icon(hass, entry.entity_id, "mdi:ceiling-light")
+    assert registry.async_get_icon_override(hass, entry.entity_id) == "mdi:ceiling-light"
+    assert entity_registry.async_get(entry.entity_id).icon == "mdi:ceiling-light"
+
+    await registry.async_set_entity_icon(hass, entry.entity_id, None)
+    assert registry.async_get_icon_override(hass, entry.entity_id) is None
+
+
+async def test_set_entity_icon_needs_a_registry_entry(hass: HomeAssistant) -> None:
+    hass.states.async_set("light.yaml_only", "off")
+
+    with pytest.raises(ValueError):
+        await registry.async_set_entity_icon(hass, "light.yaml_only", "mdi:lamp")
+
+    assert registry.async_get_icon_override(hass, "light.yaml_only") is None

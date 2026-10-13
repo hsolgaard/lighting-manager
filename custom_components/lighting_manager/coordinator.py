@@ -58,6 +58,8 @@ class LightView:
     countdown_expires_at: str | None
     source_integration: str | None
     device_id: str | None
+    icon: str | None
+    area_order: int | None
     area_mismatch: tuple[str, str] | None
     status: str
 
@@ -188,6 +190,12 @@ class LightingManagerCoordinator:
         if self.scheduler is not None:
             schedule_count = len(self.scheduler.async_schedules_for_entity(entity_id))
 
+        area_order: int | None = None
+        if area_id is not None:
+            saved_order = self.store.get_area_light_order(area_id)
+            if entity_id in saved_order:
+                area_order = saved_order.index(entity_id)
+
         status = "ok"
         if not record.adopted and not record.ignored:
             status = "needs_setup"
@@ -216,6 +224,8 @@ class LightingManagerCoordinator:
             countdown_expires_at=self.countdown.expires_at_iso(entity_id),
             source_integration=registry.async_get_source_integration(self.hass, entity_id),
             device_id=registry.async_get_device_id(self.hass, entity_id),
+            icon=registry.async_get_icon_override(self.hass, entity_id),
+            area_order=area_order,
             area_mismatch=area_mismatch,
             status=status,
         )
@@ -319,6 +329,9 @@ class LightingManagerCoordinator:
 
     async def async_rename_light(self, entity_id: str, name: str) -> None:
         await registry.async_rename_entity(self.hass, entity_id, name)
+
+    async def async_set_icon(self, entity_id: str, icon: str | None) -> None:
+        await registry.async_set_entity_icon(self.hass, entity_id, icon)
 
     async def async_set_light_type(self, entity_id: str, light_type: str | None) -> None:
         await registry.async_set_light_type(self.hass, entity_id, light_type)

@@ -46,15 +46,22 @@ What's implemented vs. still to build:
   (`ha-data-table`, `ha-area-picker`) rather than Lit - see the header
   comment in `frontend/lighting-manager-panel.js` for why, and
   `frontend/README.md` for what still needs live-instance verification.
+- Rooms view and room filter (PRD Revision §4.7): a room selector in the
+  toolbar narrows Table, Rooms, Inbox and Dashboard to one room; the Rooms
+  tab shows one section per room (state, type, schedules, badges, header
+  counts of anything needing attention) and its arrows change the order of
+  the lights on the dashboard room card (`set_area_light_order`).
+- Icon editing (`set_icon`): the light drawer edits the entity registry's
+  own icon, so every tile (room card included) shows it. `LightView` gained
+  `icon` and `area_order`.
 - `unignore_light` action (backend + websocket command) - added while
   building the Inbox UI; not in the original PRD, but an Ignore button
   with no way back would be a one-way trap.
 
 ### Not yet built
 
-- Rooms view (§7) - Area-grouped cards, drag/drop. Table + Inbox
-  (immediately above) covers the same ground for now; Rooms is a
-  different presentation of the same data, not new backend work.
+- Rooms view drag/drop and per-room bulk settings (§7). The Rooms tab
+  exists (see above) with arrows rather than drag/drop.
 - First-run bulk adoption UI (§10) - backend actions (`adopt_light`,
   `ignore_light`) exist and the Inbox surfaces new lights one at a time;
   there's no dedicated bulk-review screen yet.

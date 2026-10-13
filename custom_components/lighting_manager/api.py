@@ -40,6 +40,7 @@ def async_register_websocket_commands(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_move_light)
     websocket_api.async_register_command(hass, ws_rename_light)
     websocket_api.async_register_command(hass, ws_set_light_type)
+    websocket_api.async_register_command(hass, ws_set_icon)
     websocket_api.async_register_command(hass, ws_set_dashboard_included)
     websocket_api.async_register_command(hass, ws_set_tile_width)
     websocket_api.async_register_command(hass, ws_set_brightness_slider)
@@ -182,6 +183,28 @@ async def ws_move_light(hass: HomeAssistant, connection, msg) -> None:
 @websocket_api.async_response
 async def ws_rename_light(hass: HomeAssistant, connection, msg) -> None:
     await _coordinator(hass).async_rename_light(msg["entity_id"], msg["name"])
+    connection.send_result(msg["id"])
+
+
+_ICON_PATTERN = r"^[a-z0-9_]+:[a-z0-9_-]+$"
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): f"{DOMAIN}/set_icon",
+        vol.Required("entity_id"): _LIGHT_OR_SWITCH,
+        # "mdi:ceiling-light" style; None or "" clears the override.
+        vol.Required("icon"): vol.Any(None, "", vol.Match(_ICON_PATTERN)),
+    }
+)
+@websocket_api.async_response
+async def ws_set_icon(hass: HomeAssistant, connection, msg) -> None:
+    try:
+        await _coordinator(hass).async_set_icon(msg["entity_id"], msg["icon"] or None)
+    except ValueError as err:
+        connection.send_error(msg["id"], "invalid_format", str(err))
+        return
     connection.send_result(msg["id"])
 
 

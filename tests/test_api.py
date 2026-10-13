@@ -478,3 +478,84 @@ async def test_set_brightness_slider_rejected_for_non_admin(
     response = await client.receive_json()
     assert response["success"] is False
     assert response["error"]["code"] == "unauthorized"
+
+
+async def test_set_icon_then_reflected_in_list_and_clearable(
+    api_hass: HomeAssistant, hass_ws_client
+) -> None:
+    entry = er.async_get(api_hass).async_get_or_create("light", "test_platform", "icon-ws")
+    api_hass.states.async_set(entry.entity_id, "off")
+    client = await hass_ws_client(api_hass)
+
+    await client.send_json_auto_id(
+        {"type": f"{DOMAIN}/set_icon", "entity_id": entry.entity_id, "icon": "mdi:ceiling-light"}
+    )
+    assert (await client.receive_json())["success"] is True
+
+    await client.send_json_auto_id({"type": f"{DOMAIN}/list_lights"})
+    lights = (await client.receive_json())["result"]["lights"]
+    assert next(l for l in lights if l["entity_id"] == entry.entity_id)["icon"] == "mdi:ceiling-light"
+
+    await client.send_json_auto_id(
+        {"type": f"{DOMAIN}/set_icon", "entity_id": entry.entity_id, "icon": ""}
+    )
+    assert (await client.receive_json())["success"] is True
+    await client.send_json_auto_id({"type": f"{DOMAIN}/list_lights"})
+    lights = (await client.receive_json())["result"]["lights"]
+    assert next(l for l in lights if l["entity_id"] == entry.entity_id)["icon"] is None
+
+
+async def test_set_icon_rejects_malformed_icon_and_unregistered_light(
+    api_hass: HomeAssistant, hass_ws_client
+) -> None:
+    entry = er.async_get(api_hass).async_get_or_create("light", "test_platform", "icon-bad")
+    api_hass.states.async_set(entry.entity_id, "off")
+    api_hass.states.async_set("light.yaml_only", "off")
+    client = await hass_ws_client(api_hass)
+
+    await client.send_json_auto_id(
+        {"type": f"{DOMAIN}/set_icon", "entity_id": entry.entity_id, "icon": "not an icon"}
+    )
+    assert (await client.receive_json())["success"] is False
+
+    await client.send_json_auto_id(
+        {"type": f"{DOMAIN}/set_icon", "entity_id": "light.yaml_only", "icon": "mdi:lamp"}
+    )
+    response = await client.receive_json()
+    assert response["success"] is False
+    assert response["error"]["code"] == "invalid_format"
+
+
+async def test_set_icon_rejected_for_non_admin(
+    api_hass: HomeAssistant, hass_ws_client, hass_read_only_access_token
+) -> None:
+    client = await hass_ws_client(api_hass, hass_read_only_access_token)
+
+    await client.send_json_auto_id(
+        {"type": f"{DOMAIN}/set_icon", "entity_id": "light.spots", "icon": "mdi:lamp"}
+    )
+    response = await client.receive_json()
+    assert response["success"] is False
+    assert response["error"]["code"] == "unauthorized"
+
+
+async def test_list_lights_reports_area_order_once_saved(
+    api_hass: HomeAssistant, hass_ws_client
+) -> None:
+    from homeassistant.helpers import area_registry as ar
+
+    coordinator: LightingManagerCoordinator = api_hass.data[DOMAIN]["coordinator"]
+    den = ar.async_get(api_hass).async_create("Den")
+    first = er.async_get(api_hass).async_get_or_create("light", "test_platform", "ord-first")
+    second = er.async_get(api_hass).async_get_or_create("light", "test_platform", "ord-second")
+    for entry in (first, second):
+        api_hass.states.async_set(entry.entity_id, "off")
+        await coordinator.async_adopt_light(entry.entity_id, area_id=den.id)
+    await coordinator.async_set_area_light_order(den.id, [second.entity_id, first.entity_id])
+
+    client = await hass_ws_client(api_hass)
+    await client.send_json_auto_id({"type": f"{DOMAIN}/list_lights"})
+    lights = {l["entity_id"]: l for l in (await client.receive_json())["result"]["lights"]}
+
+    assert lights[second.entity_id]["area_order"] == 0
+    assert lights[first.entity_id]["area_order"] == 1
