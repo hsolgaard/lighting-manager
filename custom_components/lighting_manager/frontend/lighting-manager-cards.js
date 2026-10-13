@@ -337,13 +337,15 @@ class LightingManagerCountdownCard extends HTMLElement {
       badge.className = 'lm-cd-badge';
       badge.setAttribute('aria-label', 'Countdown running');
       badge.style.cssText =
-        'position:absolute;top:50%;right:12px;transform:translateY(-50%);' +
-        'display:flex;align-items:center;gap:3px;padding:2px 8px 2px 6px;' +
-        'border-radius:12px;font-size:12px;font-weight:600;line-height:18px;' +
+        // Bottom-right, level with the tile's state line ("On"/"Off"), so it
+        // never covers the light's name on the line above.
+        'position:absolute;bottom:5px;right:10px;' +
+        'display:flex;align-items:center;gap:2px;padding:1px 7px 1px 5px;' +
+        'border-radius:11px;font-size:11.5px;font-weight:600;line-height:18px;' +
         'font-variant-numeric:tabular-nums;pointer-events:none;z-index:1;' +
         'background:var(--primary-color,#03a9f4);color:var(--text-primary-color,#fff);';
       badge.innerHTML =
-        '<ha-icon icon="mdi:timer-outline" style="--mdc-icon-size:14px;display:flex"></ha-icon>' +
+        '<ha-icon icon="mdi:timer-outline" style="--mdc-icon-size:13px;display:flex"></ha-icon>' +
         '<span data-badge-text></span>';
       this._badge = badge;
     }
