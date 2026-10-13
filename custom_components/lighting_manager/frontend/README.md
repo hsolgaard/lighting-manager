@@ -102,7 +102,10 @@ Two cards ship with the integration and are loaded globally via
   timer badge on the tile.
 - `custom:lighting-manager-room-card` - `area: living_room` (id or name);
   optional `columns: 2`. A light can also show a brightness slider under its
-  tile (tick "Show brightness slider on dashboard" in the panel). Draws every adopted, shown-on-dashboard light in
+  tile (tick "Show brightness slider on dashboard" in the panel).
+  Administrators also see a small "Reorder" button above the tiles: it
+  switches the card to a list with up/down arrows, and the order is saved
+  per room in Lighting Manager (shared with the light list card). Draws every adopted, shown-on-dashboard light in
   the Area as a countdown tile, using each light's Lighting Manager
   settings (name, order, tile width half/full). Nothing to maintain: add
   or hide a light in Lighting Manager and the card follows.
