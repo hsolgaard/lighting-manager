@@ -8,6 +8,9 @@ from __future__ import annotations
 DOMAIN = "lighting_manager"
 PLATFORMS: list[str] = []  # Lighting Manager has no entity platforms of its own (PRD §28).
 
+# Options (Settings > Devices & services > Lighting Manager > Configure)
+CONF_SHOW_SIDEBAR_PAGES = "show_sidebar_pages"  # default True: the Lights and Schedules pages
+
 STORAGE_VERSION = 1
 STORAGE_KEY = f"{DOMAIN}/store"
 

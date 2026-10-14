@@ -9,6 +9,6 @@
   "iot_class": "calculated",
   "integration_type": "hub",
   "requirements": [],
-  "dependencies": [],
+  "dependencies": ["frontend", "http", "panel_custom", "websocket_api"],
   "single_config_entry": true
 }

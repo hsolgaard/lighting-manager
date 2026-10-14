@@ -101,3 +101,75 @@ async def test_ready_made_pages_are_registered_in_the_sidebar(hass: HomeAssistan
         # Everyone in the house can use them; the bundle defines the element.
         assert kwargs["require_admin"] is False
         assert kwargs["module_url"].startswith(f"{STATIC_URL_PREFIX}/{BUNDLE_FILE}?v=")
+
+
+async def test_pages_can_be_switched_off_and_on_without_a_reload(hass: HomeAssistant) -> None:
+    hass.http = MagicMock()
+    hass.http.async_register_static_paths = AsyncMock()
+    register = AsyncMock()
+    remove = MagicMock()
+
+    with patch.object(integration.panel_custom, "async_register_panel", register), patch.object(
+        integration.frontend, "async_remove_panel", remove
+    ), patch.object(integration.frontend, "add_extra_js_url"):
+        # Off from the start: only the admin panel is registered.
+        await integration._async_register_panel(hass, show_pages=False)
+        assert [c.kwargs["frontend_url_path"] for c in register.call_args_list] == [
+            "lighting-manager-panel"
+        ]
+
+        entry = MagicMock()
+        entry.options = {"show_sidebar_pages": True}
+        await integration._async_options_updated(hass, entry)
+        urls = {c.kwargs["frontend_url_path"] for c in register.call_args_list}
+        assert urls == {"lighting-manager-panel", "lighting-manager-lights", "lighting-manager-schedules"}
+
+        # Saving the same option twice does not register the pages twice.
+        register.reset_mock()
+        await integration._async_options_updated(hass, entry)
+        register.assert_not_called()
+
+        entry.options = {"show_sidebar_pages": False}
+        await integration._async_options_updated(hass, entry)
+        assert {c.args[1] for c in remove.call_args_list} == {
+            "lighting-manager-lights",
+            "lighting-manager-schedules",
+        }
+
+        # Switching off twice is harmless too.
+        remove.reset_mock()
+        await integration._async_options_updated(hass, entry)
+        remove.assert_not_called()
+
+
+async def test_options_flow_defaults_to_pages_on_and_saves_the_choice(hass: HomeAssistant) -> None:
+    """Drives the flow class directly: going through hass.config_entries would
+    set up the manifest's real dependencies (frontend etc.), which this older
+    test environment cannot import."""
+    from pytest_homeassistant_custom_component.common import MockConfigEntry
+
+    from custom_components.lighting_manager.config_flow import (
+        LightingManagerConfigFlow,
+        LightingManagerOptionsFlow,
+    )
+    from custom_components.lighting_manager.const import CONF_SHOW_SIDEBAR_PAGES, DOMAIN
+
+    entry = MockConfigEntry(domain=DOMAIN, data={})
+    flow = LightingManagerConfigFlow.async_get_options_flow(entry)
+    assert isinstance(flow, LightingManagerOptionsFlow)
+    flow.hass = hass
+    flow.handler = entry.entry_id
+
+    form = await flow.async_step_init()
+    assert form["type"] == "form"
+    key = next(k for k in form["data_schema"].schema if k == CONF_SHOW_SIDEBAR_PAGES)
+    assert key.default() is True
+
+    entry.options = {CONF_SHOW_SIDEBAR_PAGES: False}
+    form = await flow.async_step_init()
+    key = next(k for k in form["data_schema"].schema if k == CONF_SHOW_SIDEBAR_PAGES)
+    assert key.default() is False
+
+    done = await flow.async_step_init({CONF_SHOW_SIDEBAR_PAGES: True})
+    assert done["type"] == "create_entry"
+    assert done["data"] == {CONF_SHOW_SIDEBAR_PAGES: True}

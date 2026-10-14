@@ -14,11 +14,11 @@ import logging
 import os
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.components import frontend, panel_custom
 
 from .api import async_register_websocket_commands
-from .const import DOMAIN, PLATFORMS
+from .const import CONF_SHOW_SIDEBAR_PAGES, DOMAIN, PLATFORMS
 from .coordinator import LightingManagerCoordinator
 from .services import async_register_services, async_unregister_services
 
@@ -84,7 +84,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         async_register_services(hass)
         hass.data[DOMAIN]["_services_registered"] = True
 
-    await _async_register_panel(hass)
+    await _async_register_panel(
+        hass, show_pages=entry.options.get(CONF_SHOW_SIDEBAR_PAGES, True)
+    )
+    # Switching the pages on or off in Configure takes effect straight away,
+    # with no reload (a reload would try to register the static paths twice).
+    entry.async_on_unload(entry.add_update_listener(_async_options_updated))
 
     if PLATFORMS:
         await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
@@ -100,8 +105,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
 
     frontend.async_remove_panel(hass, PANEL_URL)
-    for url_path, *_rest in EXTRA_PAGES:
-        frontend.async_remove_panel(hass, url_path)
+    _async_remove_pages(hass)
     async_unregister_services(hass)
     hass.data.pop(DOMAIN, None)
     return True
@@ -115,7 +119,7 @@ def _file_version(path: str) -> int:
         return 0
 
 
-async def _async_register_panel(hass: HomeAssistant) -> None:
+async def _async_register_panel(hass: HomeAssistant, show_pages: bool = True) -> None:
     """Register the frontend panel (PRD §28 frontend/lighting-manager-panel.js).
 
     This scaffold registers a placeholder panel (see frontend/README.md)
@@ -167,12 +171,41 @@ async def _async_register_panel(hass: HomeAssistant) -> None:
         embed_iframe=False,
     )
 
-    # The two ready-made pages. Their web components are defined by the card
-    # bundle, which doubles as the panel module.
-    bundle_module = (
-        f"{STATIC_URL_PREFIX}/{BUNDLE_FILE}"
-        f"?v={_file_version(card_paths[f'{STATIC_URL_PREFIX}/{BUNDLE_FILE}'])}"
+    if show_pages:
+        await _async_register_pages(hass)
+
+    # After the panel registration (which pulls in the frontend), so the
+    # frontend's url registry is guaranteed to exist. add_extra_js_url is
+    # idempotent (a set), so a reload doesn't duplicate the entry. Only the
+    # bundle is registered; the version in the URL (file mtime) makes a new
+    # release load fresh.
+    bundle_url = f"{STATIC_URL_PREFIX}/{BUNDLE_FILE}"
+    frontend.add_extra_js_url(
+        hass, f"{bundle_url}?v={_file_version(card_paths[bundle_url])}"
     )
+
+
+async def _async_options_updated(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Options changed: show or hide the Lights and Schedules pages."""
+    if entry.options.get(CONF_SHOW_SIDEBAR_PAGES, True):
+        await _async_register_pages(hass)
+    else:
+        _async_remove_pages(hass)
+
+
+async def _async_register_pages(hass: HomeAssistant) -> None:
+    """Add the two ready-made sidebar pages (no-op if they are already there).
+
+    Their web components live in the card bundle, which doubles as the
+    panel module.
+    """
+    domain_data = hass.data.setdefault(DOMAIN, {})
+    if domain_data.get("pages_registered"):
+        return
+    bundle_path = hass.config.path(
+        "custom_components/lighting_manager/frontend/" + BUNDLE_FILE
+    )
+    bundle_module = f"{STATIC_URL_PREFIX}/{BUNDLE_FILE}?v={_file_version(bundle_path)}"
     for url_path, element, title, icon in EXTRA_PAGES:
         await panel_custom.async_register_panel(
             hass,
@@ -184,13 +217,15 @@ async def _async_register_panel(hass: HomeAssistant) -> None:
             require_admin=False,
             embed_iframe=False,
         )
+    domain_data["pages_registered"] = True
 
-    # After the panel registration (which pulls in the frontend), so the
-    # frontend's url registry is guaranteed to exist. add_extra_js_url is
-    # idempotent (a set), so a reload doesn't duplicate the entry. Only the
-    # bundle is registered; the version in the URL (file mtime) makes a new
-    # release load fresh.
-    bundle_url = f"{STATIC_URL_PREFIX}/{BUNDLE_FILE}"
-    frontend.add_extra_js_url(
-        hass, f"{bundle_url}?v={_file_version(card_paths[bundle_url])}"
-    )
+
+@callback
+def _async_remove_pages(hass: HomeAssistant) -> None:
+    """Take the two ready-made sidebar pages away (no-op if they are not there)."""
+    domain_data = hass.data.get(DOMAIN, {})
+    if not domain_data.get("pages_registered"):
+        return
+    for url_path, *_rest in EXTRA_PAGES:
+        frontend.async_remove_panel(hass, url_path)
+    domain_data["pages_registered"] = False

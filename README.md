@@ -54,6 +54,11 @@ What's implemented vs. still to build:
 - Icon editing (`set_icon`): the light drawer edits the entity registry's
   own icon, so every tile (room card included) shows it. `LightView` gained
   `icon` and `area_order`.
+- Ready-made sidebar pages: **Lights (Lighting Manager)** and **Schedules
+  (Lighting Manager)**, created automatically and open to every user. Switch
+  them off or on in Settings > Devices & services > Lighting Manager >
+  Configure ("Show the Lights and Schedules pages in the sidebar", on by
+  default); the change applies immediately, with no restart.
 - Light replacement (`replace_light`, PRD §24): a new light takes over an old
   light's entity ID, name, room, icon, labels and Lighting Manager settings,
   so schedules, automations and dashboards keep working untouched. A dead

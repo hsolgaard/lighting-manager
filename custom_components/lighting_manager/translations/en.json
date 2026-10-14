@@ -1,0 +1,31 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Set up Lighting Manager",
+        "description": "Lighting Manager manages your whole house's lighting from one panel. Nothing is auto-adopted - the first-run review lets you choose what to bring in."
+      }
+    }
+  },
+  "issues": {
+    "storage_corrupt": {
+      "title": "Lighting Manager storage could not be loaded",
+      "description": "Lighting Manager's own metadata store failed to load or migrate ({detail}). Managed-light identity, adoption state, and countdown state may be affected until this is resolved."
+    },
+    "provider_failure": {
+      "title": "Lighting Manager scheduler provider unavailable",
+      "description": "The {provider} integration Lighting Manager was using for scheduling is no longer available. Scheduling features are disabled until it's reinstalled or reconfigured; countdown timers are unaffected since they're native to Lighting Manager."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Lighting Manager options",
+        "description": "Lighting Manager adds two ready-made pages to the sidebar: Lights (everything by room) and Schedules (one schedule list per room). Switch them off here if you would rather build your own dashboards; the cards stay available.",
+        "data": {
+          "show_sidebar_pages": "Show the Lights and Schedules pages in the sidebar"
+        }
+      }
+    }
+  }
+}
