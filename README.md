@@ -1,160 +1,309 @@
 # Lighting Manager
 
-A Home Assistant custom integration that brings routine lighting administration
-- naming, room assignment, countdowns, and (when installed) recurring
-schedules - into one workflow, instead of spread across Settings, dashboards,
-and separate scheduler/timer integrations.
+**Manage your lights in one place, not in five.**
 
-> Manage the light, not the plumbing.
+Lighting Manager is a Home Assistant integration for the everyday jobs that
+Home Assistant spreads across Settings, dashboards and separate add-ons:
+naming a light, putting it in a room, keeping it tidy, setting a timer, adding
+a schedule, and swapping a bulb for a new one without breaking anything.
 
-Full product rationale, competitive analysis and decision history live in the
-PRD and its companion Feasibility Review (tracked in the project, not this
-repo) rather than duplicated here.
+It adds a **Lighting Manager** panel to your sidebar, two ready-made pages
+(**Lights** and **Schedules**), and a set of dashboard cards. There is no YAML
+to write to get started.
 
-## Status: initial backend scaffold (2026-09)
+<img width="1173" height="672" alt="image" src="https://github.com/user-attachments/assets/0e4c70ea-7761-4e3c-af78-1a7ec8e6c91e" />
 
-This is the first commit after PRD v0.3 and its technical-spike sign-off.
-What's implemented vs. still to build:
+- **One list of every light**, with rooms, types, icons and what is on now.
+- **New lights are never added without you.** A new light waits in an Inbox
+  until you choose its name, room and type.
+- **Ready-made pages** for the whole house: everything that is on, every light
+  by room, and every room's schedules. Anyone in the house can use them.
+- **Countdowns** ("on for 30 minutes") built in, on any light tile.
+- **Schedules by room**, using the popular Scheduler add-on (optional, see
+  [Requirements](#requirements)).
+- **Replace a light** (a dead bulb, or an upgrade such as Wi-Fi to Zigbee) and
+  its name, room, schedules and settings carry over to the new one.
 
-### Implemented
+> Lighting Manager is new. It has been tested on Home Assistant 2026.7. Please
+> [open an issue](https://github.com/hsolgaard/lighting-manager/issues) if
+> something does not behave as described here.
 
-- Discovery of `light.*` entities and explicitly promoted `switch.*` entities
-  (§11, §11.1)
-- Effective-Area resolution and mismatch detection, entity-level Area
-  override read/write (§14)
-- Inline rename via the entity registry (§13)
-- Controlled light-type taxonomy backed by native HA Labels, single-label
-  enforced (§15)
-- Persisted managed-light metadata with schema versioning (§25)
-- Native countdown engine: absolute-expiry persistence, restart restoration,
-  external-action cancellation (§20)
-- Niels Faber Scheduler adapter with a maintained reverse index (entity to
-  schedules), confirmed against a real `switch.schedule_*` entity's attribute
-  shape (§18)
-- Inbox condition computation: new, unassigned, missing, area mismatch (§16)
-- Selective HA Repairs integration for storage corruption / provider failure
-  only (§17)
-- Websocket API surface for all of the above, admin-gated on every mutating
-  command (§29, §38 investigation #6)
-- Config flow (single-instance, no setup questions) (§28)
+## Requirements
 
-- Table view (§8) and Inbox (§16) frontend: sortable/filterable table of
-  all lights plus a grouped inbox with condition-specific quick actions,
-  both backed by a shared detail drawer (rename, move, set type, adopt/
-  ignore/un-ignore, dashboard toggle, countdown start/cancel, promote a
-  switch). Built in plain JS against HA's own native components
-  (`ha-data-table`, `ha-area-picker`) rather than Lit - see the header
-  comment in `frontend/lighting-manager-panel.js` for why, and
-  `frontend/README.md` for what still needs live-instance verification.
-- Rooms view and room filter (PRD Revision §4.7): a room selector in the
-  toolbar narrows Table, Rooms, Inbox and Dashboard to one room; the Rooms
-  tab shows one section per room (state, type, schedules, badges, header
-  counts of anything needing attention) and its arrows change the order of
-  the lights on the dashboard room card (`set_area_light_order`).
-- Icon editing (`set_icon`): the light drawer edits the entity registry's
-  own icon, so every tile (room card included) shows it. `LightView` gained
-  `icon` and `area_order`.
-- Ready-made sidebar pages: **Lights (Lighting Manager)** and **Schedules
-  (Lighting Manager)**, created automatically and open to every user. Switch
-  them off or on in Settings > Devices & services > Lighting Manager >
-  Configure ("Show the Lights and Schedules pages in the sidebar", on by
-  default); the change applies immediately, with no restart.
-- Light replacement (`replace_light`, PRD §24): a new light takes over an old
-  light's entity ID, name, room, icon, labels and Lighting Manager settings,
-  so schedules, automations and dashboards keep working untouched. A dead
-  old light is removed; one that still works (e.g. Wi-Fi to Zigbee upgrade)
-  is renamed `<id>_replaced` and disabled so it can't reappear in the Inbox.
-  Started from the Replace button in a light's drawer, from "Replaces…" on a
-  new light in the Inbox, or "Replace…" on a missing one - one dialog.
-- `unignore_light` action (backend + websocket command) - added while
-  building the Inbox UI; not in the original PRD, but an Ignore button
-  with no way back would be a one-way trap.
+**Needed:** Home Assistant 2025.1 or newer, and the lights you want to manage
+already set up in Home Assistant (Zigbee, Wi-Fi, Hue, anything that gives you a
+`light` entity).
 
-### Not yet built
+**Optional, for schedules:** two separate projects by Niels Faber. They are
+third-party, not part of Lighting Manager, and both are available in HACS.
+Without them everything else in Lighting Manager works; the schedule parts just
+stay empty.
 
-- Rooms view drag/drop and per-room bulk settings (§7). The Rooms tab
-  exists (see above) with arrows rather than drag/drop.
-- First-run bulk adoption UI (§10) - backend actions (`adopt_light`,
-  `ignore_light`) exist and the Inbox surfaces new lights one at a time;
-  there's no dedicated bulk-review screen yet.
-- Bulk operations (§9)
-- Schedule presentation UI (§19) and the specialist lighting dashboard (§22)
-- Configurable table columns, saved filters (§26) - P1
+| Install | What it does | Where |
+|---|---|---|
+| **Scheduler Component** | The part that stores and runs your schedules. | [nielsfaber/scheduler-component](https://github.com/nielsfaber/scheduler-component) |
+| **Scheduler Card** | The screen where you add and edit schedules. Lighting Manager shows it inside its own pages. | [nielsfaber/scheduler-card](https://github.com/nielsfaber/scheduler-card) |
 
-### Open before the schedule UI specifically is finalized
+Install both from HACS (search for "Scheduler"), and restart Home Assistant
+after installing the component.
 
-The Niels Faber adapter's reverse-index logic is confirmed correct for a
-single-timeslot, single-action schedule (verified against a live instance).
-Not yet confirmed: whether a schedule with multiple distinct triggers (e.g.
-an ON at 18:30 and an OFF at 23:15 for the same light) is one
-`switch.schedule_*` entity with parallel `timeslots`/`weekdays`/`actions`
-arrays, or multiple sibling entities. See the adapter's module docstring
-(`providers/scheduler/niels_faber.py`) for detail - worth checking against a
-real multi-trigger schedule before building the schedule-presentation UI.
+## Install
 
-## Development
+### With HACS
+
+1. In HACS, open the three-dot menu, then **Custom repositories**.
+2. Paste `https://github.com/hsolgaard/lighting-manager`, choose the type
+   **Integration**, and add it.
+3. Find **Lighting Manager** in HACS and download it.
+4. Restart Home Assistant.
+
+(Once Lighting Manager is in HACS's default list you can skip steps 1 and 2 and
+just search for it.)
+
+### Manually
+
+Copy the `custom_components/lighting_manager` folder from this repository into
+the `custom_components` folder of your Home Assistant configuration, then
+restart Home Assistant.
+
+## Set up (about five minutes)
+
+1. Go to **Settings, Devices & services, Add integration**, search for
+   **Lighting Manager** and select it. There are no questions to answer.
+2. Open **Lighting Manager** in the sidebar and click the **Inbox** tab. Every
+   light Home Assistant knows about is waiting there, because nothing is added
+   automatically.
+3. For each light, click **Review**. A panel opens on the right. Choose a
+   **name**, a **room** (a Home Assistant Area) and, if you like, a **type**
+   (ceiling, lamp, spotlights...). Then click **Adopt**. Click **Ignore** for
+   anything you do not want managed, such as a light that belongs to someone
+   else or a switch that is not a lamp. You can undo Ignore later.
+
+<img width="1210" height="765" alt="image" src="https://github.com/user-attachments/assets/979b03f1-a220-4149-9af8-7bfbbac82ce9" />
+
+
+4. When you are done, open the **Lights (Lighting Manager)** page in the
+   sidebar. Your whole house is there.
+
+Lights are adopted one at a time for now. A bulk "adopt many at once" screen is
+planned.
+
+## The pages
+
+### Lights (Lighting Manager)
+
+Everything on one page: what is on right now (with **Turn all off**), then every
+light by room with on/off buttons for the whole room. Tap a light to turn it on
+or off. Double-tap it for the countdown (below). Under each room there is a
+folded **Schedules** row; open it to see that room's schedules or add one.
+
+<img width="603" height="1218" alt="Lights" src="https://github.com/user-attachments/assets/d5c90f9b-c35d-4843-8f08-ba7eae5caca4" />
+
+### Schedules (Lighting Manager)
+
+One schedule list per room, for everyone in the house. Each room has a button
+with a calendar and plus icon, **Add or edit room schedules**.
+
+<img width="1119" height="532" alt="image" src="https://github.com/user-attachments/assets/ed267397-722b-4f26-894a-7f099287f360" />
+
+
+### Turning the pages off
+
+They are on by default. To remove them from the sidebar for everyone, go to
+**Settings, Devices & services, Lighting Manager, Configure** and untick
+**Show the Lights and Schedules pages in the sidebar**. This takes effect
+straight away. Each person can also hide any sidebar entry for themselves in
+their profile. The cards below stay available either way.
+
+<img width="1074" height="532" alt="image" src="https://github.com/user-attachments/assets/82dc6ead-498e-405e-8c98-74a1da33b894" />
+
+
+## Everyday jobs
+
+### Add a new light
+
+1. Add the bulb to Home Assistant the usual way (pair it in ZHA, Zigbee2MQTT,
+   Hue, and so on).
+2. Open **Lighting Manager, Inbox**. The new light is there.
+3. **Review**, choose its name, room and type, and click **Adopt**.
+
+It now appears on the Lights page, in its room, by itself.
+
+### Add a schedule
+
+You need the two Scheduler installs above.
+
+1. Open **Schedules (Lighting Manager)** and find the room.
+2. Click the **Add or edit room schedules** button (calendar with a plus).
+3. Use the **+** in the schedule editor, choose the lights, the time and the
+   days, and save.
+
+You can also do this from the folded **Schedules** row under a room on the
+Lights page. A light's schedule count shows in the Lighting Manager table.
+
+### Set a countdown (on for 30 minutes, off in an hour)
+
+Double-tap any light tile. Pick 15, 30, 60 or 120 minutes, or type your own.
+The tile shows a small timer while it runs, and you can change or cancel it
+from the same popup. A countdown is cancelled if someone else turns the light
+off, so it never fights you. Countdowns survive a restart.
+
+<img width="952" height="543" alt="image" src="https://github.com/user-attachments/assets/6ae6773e-f378-4bfd-a876-e189d43b873c" />
+
+
+
+### Replace a light
+
+Swapping a dead bulb, or moving from one technology to another (Wi-Fi to
+Zigbee, say)?
+
+1. Add the new bulb to Home Assistant. It appears in the Inbox.
+2. In the Inbox, click **Replaces...** next to the new bulb. (Or open the old
+   light in Lighting Manager and click **Replace this light...**.)
+3. Choose the old light, read the preview, and confirm.
+
+The new light takes over the old light's **entity ID, name, room, icon, type
+and settings**, so every schedule, automation, scene and dashboard that used
+the old light keeps working with no edits. A dead old light is removed. An old
+light that still works is **disabled and renamed** (for example
+`light.kitchen_replaced`) rather than deleted, so its integration cannot
+re-create it as a new light after a restart. Delete its device later when you
+are ready.
+
+<img width="535" height="317" alt="image" src="https://github.com/user-attachments/assets/01907c46-4ba5-45ff-b493-73d05f41485e" />
+
+
+
+### Change the order of lights on a dashboard
+
+Lighting Manager, **Rooms** tab, then the arrows next to each light. The order
+is shared by every Lighting Manager card.
+
+<img width="510" height="292" alt="image" src="https://github.com/user-attachments/assets/597fb40f-a9c7-4dbd-9d7c-aacd62540f17" />
+
+
+### Other settings in the light's panel
+
+Rename, change room, change type, choose an **icon**, include or exclude the
+light from the Area-wide schedule list, show a **brightness slider** under its
+tile, and choose whether its tile is **half or full width**.
+
+## Dashboard cards (optional)
+
+The two ready-made pages cover most households. If you also want the same
+pieces on your own dashboards, add the cards below. They follow Lighting
+Manager automatically: adopt a light or rename a room and they update.
+
+Home Assistant waits for dashboard resources before it draws a dashboard, so
+add this one resource once, which makes the cards load reliably. Go to
+**Settings, Dashboards, three-dot menu, Resources, Add resource**:
 
 ```
-custom_components/lighting_manager/
-  __init__.py          entry point: wires everything together per config entry
-  const.py
-  config_flow.py
-  coordinator.py        orchestration: discovery + storage + countdown + scheduler -> LightView/InboxItem
-  registry.py            HA entity/device/area/label registry helpers
-  storage.py              persisted metadata (schema versioned)
-  countdown.py            native per-light countdown engine
-  repairs.py               selective HA Repairs integration
-  api.py                    websocket commands for the frontend panel
-  providers/scheduler/
-    base.py                 provider interface
-    niels_faber.py           Niels Faber Scheduler Component adapter
-  frontend/
-    lighting-manager-panel.js   placeholder panel (see its own README)
+URL:  /lighting_manager_static/lighting-manager-cards.js
+Type: JavaScript module
 ```
 
-### Testing
+(Lighting Manager also loads the cards by itself, but Home Assistant does not
+wait for that, so on some page loads a card could show "Custom element doesn't
+exist". The resource avoids it.)
 
+**A whole lighting page from one card:**
+
+<img width="1215" height="609" alt="image" src="https://github.com/user-attachments/assets/6071576d-4719-488b-9406-15f631cb5c61" />
+
+
+```yaml
+type: custom:lighting-manager-overview-card
+title: Lights          # optional
+columns: 2             # optional, 1 to 6
+show_schedules: true   # optional
 ```
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements-test.txt
-pytest
+
+**One room:**
+
+```yaml
+type: custom:lighting-manager-room-card
+area: living_room      # an Area id or its name
+columns: 2             # optional
 ```
 
-56 tests across `registry.py`, `storage.py`, `countdown.py`,
-`providers/scheduler/niels_faber.py`, `coordinator.py`, and a websocket-API
-smoke-test layer (`api.py`, including an admin-permission check manual
-testing didn't cover). See `tests/conftest.py` for the version caveat: this
-suite runs against `homeassistant==2024.3.1` (the newest release this
-project's package index could resolve), not the current core - it validates
-the integration's own logic, and would have caught both real bugs found so
-far (the Label id scheme, and `countdown.async_start()` never calling
-`light.turn_on`), but it isn't a substitute for testing against a live,
-current instance.
+**One light, with the countdown popup:**
 
-One real, currently-unhandled gap the suite surfaces rather than hides:
-`registry.async_rename_entity` / `async_set_entity_area` call
-`entity_registry.async_update_entity()` directly, which raises `KeyError` for
-an entity with no entity-registry entry at all (e.g. some template/YAML
-lights - `stable_key_for_entity`'s own docstring acknowledges these exist).
-Every entity tested against Hans's real instance has had a registry entry,
-so this hasn't been hit in practice. Decision (2026-09-14): left as-is for
-now rather than fixed, since it doesn't affect any light Hans actually has.
-Consequence if it is hit: `ws_rename_light`/`ws_move_light` are wrapped in
-`@websocket_api.async_response`, so the `KeyError` doesn't crash HA or the
-integration - it's caught by HA's own websocket message-handling wrapper,
-logged as an unhandled exception in the HA log, and the frontend gets back
-a generic `unknown_error` for that one command (the new panel's error
-banner will at least show *something* went wrong, rather than nothing).
-See `tests/test_coordinator.py::test_rename_on_registry_less_entity_raises`
-if this needs revisiting later.
+```yaml
+type: custom:lighting-manager-countdown-card
+entity: light.kitchen
+```
 
-Two more added while building the frontend, same "flag, don't silently
-guess" spirit:
+**Schedules for one room** (needs the Scheduler installs):
 
-- `unignore_light` (mirrors `ignore_light` exactly) - not in the original
-  PRD, added because the Inbox's Ignore action needed a way back.
-- `const.py`'s `INBOX_BROKEN_SCHEDULE_REF` / `INBOX_PROVIDER_UNAVAILABLE`
-  are defined but `coordinator.async_build_inbox()` never actually emits
-  them yet - the Inbox UI handles them generically (falls back to the raw
-  condition string) in case that changes, but nothing produces them today.
+```yaml
+type: custom:light-scheduler-list-card
+area: kitchen
+```
+
+## Turn off everything in a room
+
+An action you can use in automations and scripts. It turns off every light in
+the room, plus any switch you have adopted as a lamp, and never touches other
+switches that happen to be in the same room.
+
+```yaml
+action: lighting_manager.turn_off_area
+target:
+  area_id: kitchen
+```
+
+## Lamps on smart plugs
+
+A smart plug is a `switch`, not a `light`, so Lighting Manager never assumes it
+is a lamp. In the Lighting Manager panel click **Add a switch as a light** and
+choose it. It then appears in the Inbox like any other light.
+
+## Troubleshooting
+
+**A dashboard card says "Custom element doesn't exist."** Add the dashboard
+resource from the Dashboard cards section above, then hard-refresh the page
+(Cmd+Shift+R on a Mac, Ctrl+F5 on Windows).
+
+**The Lights and Schedules pages are not in the sidebar.** Check Settings,
+Devices & services, Lighting Manager, Configure: the box must be ticked. Also
+check your own profile has not hidden them.
+
+**Schedules are empty or the Schedules row is blank.** Install the Scheduler
+Component and the Scheduler Card from HACS (see Requirements) and restart.
+
+**A light is not in the Inbox.** It may already be adopted or ignored. Turn on
+**Show ignored** in the toolbar to see ignored lights.
+
+**A light has "unassigned" next to it.** It has no room. Open it and choose
+one. Rooms are Home Assistant Areas; create them in Settings, Areas.
+
+**The pages did not change after I updated.** Restart Home Assistant, then
+hard-refresh the browser. Lighting Manager's files are served so that a restart
+is enough to pick up a new version.
+
+## Removing Lighting Manager
+
+Remove the integration in Settings, Devices & services, then delete it in HACS
+(or delete the `custom_components/lighting_manager` folder) and restart. Your
+lights, names, rooms and schedules stay exactly as they are in Home Assistant:
+Lighting Manager keeps only its own settings, such as which lights it manages.
+If you added the dashboard resource, remove that too.
+
+## Good to know
+
+- Lighting Manager changes things in your Home Assistant when you ask it to
+  (names, rooms, icons and type labels are saved in Home Assistant's own
+  registries, so they show everywhere, not just here). Only administrators can
+  make changes. Everyone else can view the pages and start or cancel a
+  countdown.
+- A light's **type** is stored as a Home Assistant Label named like
+  "Lighting: Ceiling".
+- Schedules are provided by the Scheduler Component. Lighting Manager does not
+  run its own scheduler.
+
+## Contributing and development
+
+Bug reports and ideas are welcome in
+[Issues](https://github.com/hsolgaard/lighting-manager/issues). Developer notes
+and how to run the tests are in [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
