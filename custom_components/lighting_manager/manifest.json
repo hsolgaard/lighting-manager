@@ -1,14 +1,21 @@
 {
   "domain": "lighting_manager",
   "name": "Lighting Manager",
-  "version": "0.1.0",
-  "documentation": "https://github.com/hsolgaard/lighting-manager",
-  "issue_tracker": "https://github.com/hsolgaard/lighting-manager/issues",
-  "codeowners": ["@hsolgaard"],
+  "codeowners": [
+    "@hsolgaard"
+  ],
   "config_flow": true,
-  "iot_class": "calculated",
+  "dependencies": [
+    "frontend",
+    "http",
+    "panel_custom",
+    "websocket_api"
+  ],
+  "documentation": "https://github.com/hsolgaard/lighting-manager",
   "integration_type": "hub",
+  "iot_class": "calculated",
+  "issue_tracker": "https://github.com/hsolgaard/lighting-manager/issues",
   "requirements": [],
-  "dependencies": ["frontend", "http", "panel_custom", "websocket_api"],
-  "single_config_entry": true
+  "single_config_entry": true,
+  "version": "1.0.0"
 }
