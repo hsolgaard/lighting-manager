@@ -1,30 +1,38 @@
 # Lighting Manager
 
-**Manage your lights in one place, not in five.**
+**Set up your lights once. Your dashboards build and update themselves.**
 
-Lighting Manager is a Home Assistant integration for the everyday jobs that
-Home Assistant spreads across Settings, dashboards and separate add-ons:
-naming a light, putting it in a room, keeping it tidy, setting a timer, adding
-a schedule, and swapping a bulb for a new one without breaking anything.
+Home Assistant makes you do the same lighting jobs in several places: name a
+light in Settings, put it in an area, hand-build a dashboard card for it, add it
+to a schedule, then fix it all again when a bulb dies. Lighting Manager does
+the job once, in one place, and everything else follows.
 
-It adds a **Lighting Manager** panel to your sidebar, two ready-made pages
-(**Lights** and **Schedules**), and a set of dashboard cards. There is no YAML
-to write to get started.
+You tell it about each light one time: its **name**, its **room** and what
+**type** of light it is. From that, Lighting Manager builds the rest for you:
+
+- **Ready-made Lights and Schedules pages** for the whole house, in your
+  sidebar, with nothing to configure.
+- **Dashboard cards that build themselves.** Add one card and it shows every
+  room and every light. Adopt a new light, or rename a room, and every card
+  updates by itself. There are no entity lists to maintain and no YAML to write.
+- **Schedules by room**, and **countdowns** ("on for 30 minutes") on any light.
+- **Replace a light** without breaking anything. A new bulb takes over the old
+  one's entity ID and settings, so every schedule, automation, scene and
+  dashboard keeps working.
+
+It adds a **Lighting Manager** panel to your sidebar, where you manage all of
+this.
 
 <img width="1173" height="672" alt="image" src="https://github.com/user-attachments/assets/0e4c70ea-7761-4e3c-af78-1a7ec8e6c91e" />
 
 - **One list of every light**, with rooms, types, icons and what is on now.
 - **New lights are never added without you.** A new light waits in an Inbox
   until you choose its name, room and type.
-- **Ready-made pages** for the whole house: everything that is on, every light
-  by room, and every room's schedules. Anyone in the house can use them.
-- **Countdowns** ("on for 30 minutes") built in, on any light tile.
-- **Schedules by room**, using the popular Scheduler add-on (optional, see
-  [Requirements](#requirements)).
-- **Replace a light** (a dead bulb, or an upgrade such as Wi-Fi to Zigbee) and
-  its name, room, schedules and settings carry over to the new one.
+- **Works with lamps on smart plugs** too, not only `light` entities.
+- **Anyone in the house can use the pages.** Only administrators can change
+  settings.
 
-> Lighting Manager is new. It has been tested on Home Assistant 2026.7. Please
+> Lighting Manager is new. It has been tested on Home Assistant 2026.10. Please
 > [open an issue](https://github.com/hsolgaard/lighting-manager/issues) if
 > something does not behave as described here.
 
@@ -32,7 +40,9 @@ to write to get started.
 
 **Needed:** Home Assistant 2025.1 or newer, and the lights you want to manage
 already set up in Home Assistant (Zigbee, Wi-Fi, Hue, anything that gives you a
-`light` entity).
+`light` entity). A lamp on a smart plug works too: plugs are `switch` entities,
+so you add them with **Add a switch as a light** (see
+[Lamps on smart plugs](#lamps-on-smart-plugs)).
 
 **Optional, for schedules:** two separate projects by Niels Faber. They are
 third-party, not part of Lighting Manager, and both are available in HACS.
@@ -81,7 +91,6 @@ restart Home Assistant.
 
 <img width="1210" height="765" alt="image" src="https://github.com/user-attachments/assets/979b03f1-a220-4149-9af8-7bfbbac82ce9" />
 
-
 4. When you are done, open the **Lights (Lighting Manager)** page in the
    sidebar. Your whole house is there.
 
@@ -106,7 +115,6 @@ with a calendar and plus icon, **Add or edit room schedules**.
 
 <img width="1119" height="532" alt="image" src="https://github.com/user-attachments/assets/ed267397-722b-4f26-894a-7f099287f360" />
 
-
 ### Turning the pages off
 
 They are on by default. To remove them from the sidebar for everyone, go to
@@ -116,7 +124,6 @@ straight away. Each person can also hide any sidebar entry for themselves in
 their profile. The cards below stay available either way.
 
 <img width="1074" height="532" alt="image" src="https://github.com/user-attachments/assets/82dc6ead-498e-405e-8c98-74a1da33b894" />
-
 
 ## Everyday jobs
 
@@ -150,8 +157,6 @@ off, so it never fights you. Countdowns survive a restart.
 
 <img width="952" height="543" alt="image" src="https://github.com/user-attachments/assets/6ae6773e-f378-4bfd-a876-e189d43b873c" />
 
-
-
 ### Replace a light
 
 Swapping a dead bulb, or moving from one technology to another (Wi-Fi to
@@ -172,15 +177,12 @@ are ready.
 
 <img width="535" height="317" alt="image" src="https://github.com/user-attachments/assets/01907c46-4ba5-45ff-b493-73d05f41485e" />
 
-
-
 ### Change the order of lights on a dashboard
 
 Lighting Manager, **Rooms** tab, then the arrows next to each light. The order
 is shared by every Lighting Manager card.
 
 <img width="510" height="292" alt="image" src="https://github.com/user-attachments/assets/597fb40f-a9c7-4dbd-9d7c-aacd62540f17" />
-
 
 ### Other settings in the light's panel
 
@@ -210,7 +212,6 @@ exist". The resource avoids it.)
 **A whole lighting page from one card:**
 
 <img width="1215" height="609" alt="image" src="https://github.com/user-attachments/assets/6071576d-4719-488b-9406-15f631cb5c61" />
-
 
 ```yaml
 type: custom:lighting-manager-overview-card
