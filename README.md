@@ -23,7 +23,7 @@ You tell it about each light one time: its **name**, its **room** and what
 It adds a **Lighting Manager** panel to your sidebar, where you manage all of
 this.
 
-<img width="1173" height="672" alt="image" src="https://github.com/user-attachments/assets/0e4c70ea-7761-4e3c-af78-1a7ec8e6c91e" />
+<img width="1215" height="609" alt="image" src="https://github.com/user-attachments/assets/6071576d-4719-488b-9406-15f631cb5c61" />
 
 - **One list of every light**, with rooms, types, icons and what is on now.
 - **New lights are never added without you.** A new light waits in an Inbox
@@ -96,6 +96,17 @@ restart Home Assistant.
 
 Lights are adopted one at a time for now. A bulk "adopt many at once" screen is
 planned.
+
+## The Lighting Manager panel
+
+This is where you manage your lights. It has three tabs:
+
+- **Table**: every light you manage, with its room, type, whether it is on, its
+  status (OK, Unavailable, Needs setup), how many schedules it has and any
+  running countdown. Click a light to rename it, move it or change its
+  settings.
+- **Rooms**: your lights grouped by room, where you can change their order.
+- **Inbox**: new lights waiting for you to adopt them.
 
 ## The pages
 
@@ -211,7 +222,7 @@ exist". The resource avoids it.)
 
 **A whole lighting page from one card:**
 
-<img width="1215" height="609" alt="image" src="https://github.com/user-attachments/assets/6071576d-4719-488b-9406-15f631cb5c61" />
+<img width="1173" height="672" alt="image" src="https://github.com/user-attachments/assets/0e4c70ea-7761-4e3c-af78-1a7ec8e6c91e" />
 
 ```yaml
 type: custom:lighting-manager-overview-card
@@ -221,6 +232,8 @@ show_schedules: true   # optional
 ```
 
 **One room:**
+
+<!-- PASTE ROOM CARD SCREENSHOT HERE -->
 
 ```yaml
 type: custom:lighting-manager-room-card
