@@ -389,6 +389,8 @@ const CSS_TEXT = `
     .lm-room-meta { justify-content: flex-start; flex-basis: 100%; padding-left: 30px; }
   }`;
 
+const l_domain = (l) => (l.entity_id || "").split(".")[0];
+
 class LightingManagerPanel extends HTMLElement {
   constructor() {
     super();
@@ -509,7 +511,8 @@ class LightingManagerPanel extends HTMLElement {
       this._showToast(ACTION_SUCCESS_MESSAGES[type] || "Done");
       return true;
     } catch (err) {
-      this._showError(`${type} failed: ${this._formatError(err)}`);
+      this._lastActionError = this._formatError(err);
+      this._showError(`${type} failed: ${this._lastActionError}`);
       return false;
     }
   }
@@ -1903,6 +1906,41 @@ class LightingManagerPanel extends HTMLElement {
 
   // -- Replace-light dialog (PRD §24) --------------------------------------
 
+  // Home Assistant cannot change an entity's type, and the type is part of
+  // its ID (light.x vs switch.x). So a plug that is a switch cannot take
+  // over a light's ID (or the other way round). Say so up front, in plain
+  // words, and say how to get unstuck.
+  _replaceTypeMismatch(oldL, newL) {
+    const kind = (l) => (l.entity_id.split(".")[0] === "switch" ? "a switch" : "a light");
+    const oldType = l_domain(oldL);
+    const newType = l_domain(newL);
+    if (oldType === newType) return "";
+    const base =
+      `“${newL.name}” is ${kind(newL)} and “${oldL.name}” is ${kind(oldL)}. ` +
+      "Home Assistant doesn't let an entity change type, so one can't take over the other's ID. ";
+    if (newType === "switch" && oldType === "light") {
+      return (
+        base +
+        "To use this plug in place of that light, first turn it into a light with Home Assistant's " +
+        "“Switch as X” helper (Settings, Devices & services, Helpers, Create helper, Switch as X, choose Light). " +
+        "The new light appears in the Inbox, and you can then replace the old light with it."
+      );
+    }
+    return base + "Choose two lights, or two switches.";
+  }
+
+  _friendlyReplaceError(message) {
+    const m = message || "";
+    if (/same type/i.test(m)) {
+      return "a light and a switch can't replace each other, because Home Assistant doesn't let an entity change type.";
+    }
+    if (/no entity registry entry/i.test(m)) {
+      return "one of these lights isn't registered in Home Assistant, so it can't be renamed. Check that it is a normal entity, not a YAML-defined one.";
+    }
+    if (/different lights/i.test(m)) return "the old and new light are the same one.";
+    return m || "an unexpected error.";
+  }
+
   _openReplaceDialog({ oldId = null, newId = null } = {}) {
     const oldCandidates = this._lights
       .filter((l) => l.adopted && !l.ignored)
@@ -1970,12 +2008,26 @@ class LightingManagerPanel extends HTMLElement {
     preview.style.fontSize = "0.9em";
     box.appendChild(preview);
 
+    // Problems are shown here, inside the dialog, because the page-level
+    // error banner sits behind the overlay and is easy to miss (a failed
+    // Replace used to look like "nothing happened").
+    const problem = document.createElement("div");
+    problem.className = "lm-warning";
+    problem.setAttribute("role", "alert");
+    problem.hidden = true;
+    box.appendChild(problem);
+    const showProblem = (text) => {
+      problem.textContent = text;
+      problem.hidden = !text;
+    };
+
     const buttons = document.createElement("div");
     buttons.className = "lm-field-row";
     const confirmBtn = this._makeButton(
       "Replace light",
       async () => {
         confirmBtn.disabled = true;
+        showProblem("");
         const ok = await this._callAction("replace_light", {
           old_entity_id: oldSelect.value,
           new_entity_id: newSelect.value,
@@ -1984,6 +2036,10 @@ class LightingManagerPanel extends HTMLElement {
           overlay.remove();
           this._selectEntity(oldSelect.value);
         } else {
+          showProblem(
+            "That didn't work: " + this._friendlyReplaceError(this._lastActionError) +
+              " Nothing has been changed."
+          );
           confirmBtn.disabled = false;
         }
       },
@@ -2001,10 +2057,17 @@ class LightingManagerPanel extends HTMLElement {
     };
     const updatePreview = () => {
       preview.innerHTML = "";
+      showProblem("");
       const oldL = this._lightsById.get(oldSelect.value);
       const newL = this._lightsById.get(newSelect.value);
       confirmBtn.disabled = !(oldL && newL);
       if (!oldL || !newL) return;
+      const mismatch = this._replaceTypeMismatch(oldL, newL);
+      if (mismatch) {
+        confirmBtn.disabled = true;
+        showProblem(mismatch);
+        return;
+      }
       addLine(`“${newL.name}” will become ${oldL.entity_id}, and keep the name “${oldL.name}”.`);
       addLine(`Carried over: room (${this._areaName(oldL.area_id)}), icon, type and labels, and its dashboard, scheduling, tile and slider settings.`);
       if (oldL.schedule_count > 0) {
