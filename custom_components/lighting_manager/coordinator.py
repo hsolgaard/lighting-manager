@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
 from homeassistant.core import Event, HomeAssistant, callback
-from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers import device_registry as dr, entity_registry as er
 from homeassistant.helpers.event import (
     async_track_state_change_event,
     async_track_time_interval,
@@ -21,7 +21,7 @@ from homeassistant.helpers.event import (
 from homeassistant.helpers.start import async_at_started
 from homeassistant.util import dt as dt_util
 
-from . import registry
+from . import references, registry
 from .const import (
     INBOX_AREA_MISMATCH,
     INBOX_MISSING,
@@ -33,7 +33,7 @@ from .const import (
 from .countdown import CountdownManager
 from .providers.scheduler.base import SchedulerProvider
 from .providers.scheduler.niels_faber import NielsFaberSchedulerProvider
-from .storage import LightingManagerStore, ManagedLightRecord
+from .storage import LightingManagerStore, ManagedLightRecord, ReplacedLightRecord
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -439,7 +439,12 @@ class LightingManagerCoordinator:
         await self.store.async_set_light(key, record)
 
     async def async_replace_light(
-        self, old_entity_id: str, new_entity_id: str, convert_switch: bool = False
+        self,
+        old_entity_id: str,
+        new_entity_id: str,
+        convert_switch: bool = False,
+        use_new_id: bool = False,
+        update_references: bool = False,
     ) -> dict:
         """Replace one light with another, carrying its configuration forward (PRD §24).
 
@@ -457,8 +462,14 @@ class LightingManagerCoordinator:
         plug, say) and the old one is a light: the old light is renamed
         out of the way first, a light is created from the switch with Home
         Assistant's "Switch as X" helper, and that new light takes over
-        the old name and ID. Without convert_switch a light and a switch
-        can never replace each other (an entity can't change type).
+        the old ID (and keeps the switch's own name). Without convert_switch
+        a light and a switch can never replace each other (an entity can't
+        change type).
+
+        With use_new_id=True the new light keeps its OWN entity ID instead
+        of taking the old one. Everything that referred to the old ID then
+        needs re-pointing: with update_references=True the YAML files and
+        UI dashboards that mention it are rewritten (see references.py).
         """
         if old_entity_id == new_entity_id:
             raise ValueError("Choose two different lights")
@@ -495,6 +506,10 @@ class LightingManagerCoordinator:
         old_record = self.store.get_light(old_key)
         old_state = self.hass.states.get(old_entity_id)
         old_name = old_entry.name or (old_state.name if old_state else None) or old_record.last_known_name
+        # The new light keeps the name it already has (e.g. a "ZB-Room-Plug-Lamp2"
+        # naming standard); only the entity ID is carried over from the old light.
+        new_state = self.hass.states.get(new_entity_id)
+        new_name = new_entry.name or new_entry.original_name or (new_state.name if new_state else None)
         old_area = registry.async_get_effective_area(self.hass, old_entity_id)
         new_area = registry.async_get_effective_area(self.hass, new_entity_id)
         known_type_labels = set(registry._label_id_cache(self.hass).values())
@@ -510,39 +525,164 @@ class LightingManagerCoordinator:
             self.hass,
             old_entity_id,
             new_entity_id,
-            name=old_name,
+            old_name=old_name,
             icon=old_entry.icon,
             # A freshly created light has no room of its own yet, so give it the old one's.
             area_id=old_area if old_area and (converting or old_area != new_area) else None,
             extra_labels=set(old_entry.labels),
             drop_type_labels=old_has_type,
             convert_switch=converting,
+            keep_new_id=use_new_id,
         )
+        final_id = result["new_entity_id_now"]
         if converting:
             # The new light is a different entity from the switch it wraps, and
             # the switch (now hidden) must not stay in the Inbox as well.
             self.store.data.lights.pop(new_key, None)
             self._first_seen_missing.pop(new_entity_id, None)
-            new_key = registry.stable_key_for_entity(self.hass, old_entity_id)
+            new_key = registry.stable_key_for_entity(self.hass, final_id)
 
         record = ManagedLightRecord(**{**old_record.__dict__})
         record.adopted = True
         record.ignored = False
-        record.last_known_entity_id = old_entity_id
-        record.last_known_name = old_name
+        record.last_known_entity_id = final_id
+        record.last_known_name = new_name or old_name
         record.last_known_area_id = old_area
         self.store.data.lights.pop(old_key, None)
         await self.store.async_set_light(new_key, record)
+        if final_id != old_entity_id:
+            await self.store.async_replace_entity_id(old_entity_id, final_id)
 
         self._first_seen_missing.pop(old_entity_id, None)
         self._first_seen_missing.pop(new_entity_id, None)
 
+        # Remember the old light so it can be reviewed and removed for good later.
+        if result["outcome"] == "disabled" or old_device_id:
+            await self.store.async_set_replaced(
+                old_key,
+                ReplacedLightRecord(
+                    old_domain=old_domain,
+                    old_platform=old_platform,
+                    old_unique_id=old_entry.unique_id,
+                    old_original_entity_id=old_entity_id,
+                    old_name=old_name,
+                    old_device_id=old_device_id,
+                    replaced_by_entity_id=final_id,
+                    replaced_by_name=new_name or old_name,
+                    replaced_at=dt_util.utcnow().isoformat(),
+                    outcome=result["outcome"],
+                ),
+            )
+
+        references_report = None
+        if use_new_id and update_references and final_id != old_entity_id:
+            references_report = await references.async_rewrite_references(
+                self.hass, old_entity_id, final_id
+            )
+
         return {
-            "entity_id": old_entity_id,
+            "entity_id": final_id,
+            "kept_old_id": final_id == old_entity_id,
+            "previous_entity_id": old_entity_id,
             "outcome": result["outcome"],
             "old_entity_id_now": result["old_entity_id_now"],
             "old_platform": old_platform,
             "old_device_id": old_device_id,
             "converted": converting,
             "created_from": result.get("created_from"),
+            "references": references_report,
         }
+
+    # -- entity ID changes ---------------------------------------------------
+
+    async def async_find_references(self, entity_id: str) -> list[dict]:
+        """Everything outside Lighting Manager that mentions this entity ID."""
+        return await references.async_find_references(self.hass, self, entity_id)
+
+    async def async_change_entity_id(
+        self, entity_id: str, new_entity_id: str, update_references: bool
+    ) -> dict:
+        """Rename a light's entity ID, optionally re-pointing what referred to it."""
+        registry.async_validate_new_entity_id(self.hass, entity_id, new_entity_id)
+        await self.countdown.async_cancel(entity_id)
+        ent_reg = er.async_get(self.hass)
+        try:
+            ent_reg.async_update_entity(entity_id, new_entity_id=new_entity_id)
+        except ValueError as err:
+            raise ValueError(str(err)) from err
+        await self.store.async_replace_entity_id(entity_id, new_entity_id)
+        self._first_seen_missing.pop(entity_id, None)
+        report = None
+        if update_references:
+            report = await references.async_rewrite_references(self.hass, entity_id, new_entity_id)
+        return {"entity_id": new_entity_id, "previous_entity_id": entity_id, "references": report}
+
+    # -- replaced lights (Replaced tab) --------------------------------------
+
+    def _replaced_row(self, key: str, record: ReplacedLightRecord) -> dict | None:
+        """Live status of one replaced light, or None when there is nothing left to review."""
+        ent_reg = er.async_get(self.hass)
+        dev_reg = dr.async_get(self.hass)
+        entity_id = None
+        if record.old_platform and record.old_unique_id:
+            entity_id = ent_reg.async_get_entity_id(
+                record.old_domain, record.old_platform, record.old_unique_id
+            )
+        device = dev_reg.async_get(record.old_device_id) if record.old_device_id else None
+        if entity_id is None and device is None:
+            return None
+        shared: list[str] = []
+        if device is not None:
+            shared = sorted(
+                e.entity_id
+                for e in er.async_entries_for_device(ent_reg, device.id, include_disabled_entities=True)
+                if e.entity_id != entity_id
+            )
+        replaced_by = self.hass.states.get(record.replaced_by_entity_id or "")
+        return {
+            "id": key,
+            "old_name": record.old_name,
+            "entity_id_now": entity_id,
+            "original_entity_id": record.old_original_entity_id,
+            "platform": record.old_platform,
+            "replaced_by_entity_id": record.replaced_by_entity_id,
+            "replaced_by_name": (replaced_by.name if replaced_by else None) or record.replaced_by_name,
+            "replaced_at": record.replaced_at,
+            "outcome": record.outcome,
+            "entity_present": entity_id is not None,
+            "device_present": device is not None,
+            "device_name": (device.name_by_user or device.name) if device is not None else None,
+            "device_shared_with": shared,
+        }
+
+    async def async_list_replaced(self) -> list[dict]:
+        rows: list[dict] = []
+        for key, record in list(self.store.all_replaced().items()):
+            row = self._replaced_row(key, record)
+            if row is None:
+                await self.store.async_remove_replaced(key)  # nothing left to review
+                continue
+            rows.append(row)
+        rows.sort(key=lambda r: r["replaced_at"] or "", reverse=True)
+        return rows
+
+    async def async_remove_replaced(self, key: str) -> dict:
+        """Delete a replaced light from Home Assistant: its entity and, if unused, its device."""
+        record = self.store.all_replaced().get(key)
+        if record is None:
+            raise ValueError("That light is not on the Replaced list")
+        result = await registry.async_remove_replaced_entity_and_device(
+            self.hass,
+            domain=record.old_domain,
+            platform=record.old_platform,
+            unique_id=record.old_unique_id,
+            device_id=record.old_device_id,
+        )
+        # Forget the row once nothing of it is left; keep it if the device is stuck.
+        if self._replaced_row(key, record) is None:
+            await self.store.async_remove_replaced(key)
+        return result
+
+    async def async_dismiss_replaced(self, key: str) -> None:
+        """Stop listing a replaced light without deleting anything."""
+        await self.store.async_remove_replaced(key)

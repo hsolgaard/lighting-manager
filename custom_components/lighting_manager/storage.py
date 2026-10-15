@@ -79,6 +79,27 @@ class CountdownRecord:
 
 
 @dataclass
+class ReplacedLightRecord:
+    """One light that was replaced by another, kept so it can be reviewed and removed.
+
+    The old entity is disabled (or already gone) after a replacement; this
+    record remembers enough about it - by its stable platform/unique_id, not
+    by an entity ID that was renamed aside - to find it again later.
+    """
+
+    old_domain: str = "light"
+    old_platform: str | None = None
+    old_unique_id: str | None = None
+    old_original_entity_id: str | None = None  # the ID it had before it was replaced
+    old_name: str | None = None
+    old_device_id: str | None = None
+    replaced_by_entity_id: str | None = None
+    replaced_by_name: str | None = None
+    replaced_at: str | None = None
+    outcome: str = "disabled"  # "disabled" (still in HA) | "removed" (entity already gone)
+
+
+@dataclass
 class LightingManagerData:
     """Top-level shape of the persisted store."""
 
@@ -90,6 +111,8 @@ class LightingManagerData:
     # not present here falls back to alphabetical - see
     # coordinator.async_list_area_lights.
     area_light_order: dict[str, list[str]] = field(default_factory=dict)
+    # Lights that were replaced, awaiting review/removal (Replaced tab).
+    replaced: dict[str, dict[str, Any]] = field(default_factory=dict)
 
 
 class LightingManagerStore:
@@ -113,6 +136,7 @@ class LightingManagerStore:
             lights=raw.get("lights", {}),
             countdowns=raw.get("countdowns", {}),
             area_light_order=raw.get("area_light_order", {}),
+            replaced=raw.get("replaced", {}),
         )
 
     async def async_save(self) -> None:
@@ -121,6 +145,7 @@ class LightingManagerStore:
                 "lights": self.data.lights,
                 "countdowns": self.data.countdowns,
                 "area_light_order": self.data.area_light_order,
+                "replaced": self.data.replaced,
             }
         )
 
@@ -170,4 +195,36 @@ class LightingManagerStore:
 
     async def async_set_area_light_order(self, area_id: str, entity_ids: list[str]) -> None:
         self.data.area_light_order[area_id] = list(entity_ids)
+        await self.async_save()
+
+    # -- replaced lights (Replaced tab) -------------------------------------
+
+    def all_replaced(self) -> dict[str, ReplacedLightRecord]:
+        return {k: ReplacedLightRecord(**v) for k, v in self.data.replaced.items()}
+
+    async def async_set_replaced(self, key: str, record: ReplacedLightRecord) -> None:
+        self.data.replaced[key] = asdict(record)
+        await self.async_save()
+
+    async def async_remove_replaced(self, key: str) -> None:
+        if key in self.data.replaced:
+            del self.data.replaced[key]
+            await self.async_save()
+
+    # -- entity ID changes --------------------------------------------------
+
+    async def async_replace_entity_id(self, old: str, new: str) -> None:
+        """Follow an entity ID change in the lists that store plain entity IDs."""
+        for order in self.data.area_light_order.values():
+            for i, entity_id in enumerate(order):
+                if entity_id == old:
+                    order[i] = new
+        for raw in self.data.lights.values():
+            if raw.get("last_known_entity_id") == old:
+                raw["last_known_entity_id"] = new
+        for record in self.data.replaced.values():
+            if record.get("replaced_by_entity_id") == old:
+                record["replaced_by_entity_id"] = new
+        if old in self.data.countdowns:
+            self.data.countdowns[new] = self.data.countdowns.pop(old)
         await self.async_save()

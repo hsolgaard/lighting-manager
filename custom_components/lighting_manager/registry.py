@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 
 from homeassistant.core import HomeAssistant, State
 from homeassistant.helpers import (
@@ -298,12 +299,13 @@ async def async_take_over_entity_id(
     old_entity_id: str,
     new_entity_id: str | None,
     *,
-    name: str | None,
+    old_name: str | None,
     icon: str | None,
     area_id: str | None,
     extra_labels: set[str],
     drop_type_labels: bool,
     convert_switch: bool = False,
+    keep_new_id: bool = False,
 ) -> dict:
     """Move new_entity_id onto old_entity_id's ID and retire the old entry.
 
@@ -312,8 +314,14 @@ async def async_take_over_entity_id(
     switch (Home Assistant's "Switch as X" helper) and the new light is
     the one that takes over.
 
-    The old entry is first renamed to "<name> (replaced)" and its ID to
-    <id>_replaced, so the newcomer can take both the name and the ID.
+    With keep_new_id=True the newcomer keeps its own entity ID instead of
+    taking the old one (the caller is then responsible for re-pointing
+    whatever referred to the old ID).
+
+    The old entry is first renamed to "<old_name> (replaced)" and its ID
+    to <id>_replaced, so the newcomer can take the ID. The newcomer keeps
+    its own name; a light created from a switch gets the switch's name from
+    the Switch as X helper itself, which also puts it on the switch's device.
 
     Returns {"old_entity_id_now", "outcome": "removed"|"disabled",
     "created_from": <switch id or None>}. Raises ValueError (after
@@ -337,14 +345,14 @@ async def async_take_over_entity_id(
     aside_id = _free_aside_id(hass, old_entity_id)
 
     aside_changes: dict = {"new_entity_id": aside_id}
-    if name:
-        aside_changes["name"] = f"{name}{REPLACED_SUFFIX}"
+    if old_name:
+        aside_changes["name"] = f"{old_name}{REPLACED_SUFFIX}"
     registry.async_update_entity(old_entity_id, **aside_changes)
     await _async_wait_state_cleared(hass, old_entity_id)
 
     def undo_aside() -> None:
         restore: dict = {"new_entity_id": old_entity_id}
-        if name:
+        if old_name:
             restore["name"] = old_entry.name
         registry.async_update_entity(aside_id, **restore)
 
@@ -355,7 +363,7 @@ async def async_take_over_entity_id(
         hidden_before = new_entry.hidden_by
         try:
             new_entity_id, config_entry = await async_create_light_from_switch(
-                hass, switch_id, name
+                hass, switch_id, None
             )
         except Exception:
             undo_aside()
@@ -364,9 +372,7 @@ async def async_take_over_entity_id(
         created_from = switch_id
         new_entry = registry.async_get(new_entity_id)
 
-    changes: dict = {"new_entity_id": old_entity_id}
-    if name:
-        changes["name"] = name
+    changes: dict = {} if keep_new_id else {"new_entity_id": old_entity_id}
     if icon:
         changes["icon"] = icon
     if area_id is not None:
@@ -379,7 +385,8 @@ async def async_take_over_entity_id(
     if labels != set(new_entry.labels):
         changes["labels"] = labels
     try:
-        registry.async_update_entity(new_entity_id, **changes)
+        if changes:
+            registry.async_update_entity(new_entity_id, **changes)
     except ValueError:
         if created is not None:
             await async_discard_switch_light(hass, *created)
@@ -396,7 +403,129 @@ async def async_take_over_entity_id(
         "old_entity_id_now": aside_id,
         "outcome": outcome,
         "created_from": created_from,
+        "new_entity_id_now": new_entity_id if keep_new_id else old_entity_id,
     }
+
+
+# --- Removing a replaced light for good -------------------------------------
+
+
+def _device_config_entry_ids(device) -> set[str]:
+    """Config entries that own a device, across Home Assistant versions.
+
+    Newer Home Assistant gives a device exactly one config entry
+    (config_entry_id); older versions keep a set (config_entries).
+    """
+    single = getattr(device, "config_entry_id", None)
+    if single:
+        return {single}
+    return set(getattr(device, "config_entries", None) or ())
+
+
+async def async_remove_device_if_unused(hass: HomeAssistant, device_id: str) -> tuple[bool, str | None]:
+    """Remove a device from Home Assistant if nothing else uses it.
+
+    Returns (removed, reason_if_not). Follows what Settings > Devices does:
+    the owning integration must allow the removal (its
+    async_remove_config_entry_device hook), otherwise Home Assistant itself
+    refuses to delete the device and so do we.
+    """
+    from homeassistant import loader
+
+    device_registry = dr.async_get(hass)
+    device = device_registry.async_get(device_id)
+    if device is None:
+        return True, None
+
+    entity_registry = er.async_get(hass)
+    others = er.async_entries_for_device(entity_registry, device_id, include_disabled_entities=True)
+    if others:
+        names = ", ".join(sorted(e.entity_id for e in others)[:5])
+        return False, f"The device is still used by other entities ({names}), so it was kept."
+
+    entry_ids = _device_config_entry_ids(device)
+    entries = []
+    for entry_id in entry_ids:
+        entry = hass.config_entries.async_get_entry(entry_id)
+        if entry is None:
+            continue
+        if not getattr(entry, "supports_remove_device", None):
+            return False, (
+                f"Home Assistant can't remove this device itself: the {entry.domain} integration "
+                "doesn't allow it. Remove it where it is managed (for example in that integration's "
+                "own app or settings page)."
+            )
+        entries.append(entry)
+
+    try:
+        for entry in entries:
+            integration = await loader.async_get_integration(hass, entry.domain)
+            component = await integration.async_get_component()
+            if not await component.async_remove_config_entry_device(hass, entry, device):
+                return False, f"The {entry.domain} integration refused to remove this device."
+        if getattr(device, "config_entry_id", None) is None and hasattr(device, "config_entries"):
+            for entry in entries:  # older Home Assistant: detach each owner; the last one deletes it
+                if device_registry.async_get(device_id):
+                    device_registry.async_update_device(device_id, remove_config_entry_id=entry.entry_id)
+        elif device_registry.async_get(device_id):
+            device_registry.async_remove_device(device_id)
+    except Exception as err:  # an integration hook can raise anything
+        _LOGGER.warning("Could not remove device %s: %s", device_id, err)
+        return False, f"Home Assistant could not remove the device: {err}"
+    if device_registry.async_get(device_id) is not None:
+        return False, "The device is still registered after the removal was attempted."
+    return True, None
+
+
+async def async_remove_replaced_entity_and_device(
+    hass: HomeAssistant,
+    *,
+    domain: str,
+    platform: str | None,
+    unique_id: str | None,
+    device_id: str | None,
+) -> dict:
+    """Delete a replaced (old) entity and, when unused, its device.
+
+    The entity is looked up by platform/unique_id because its entity ID was
+    renamed aside at replacement time. Returns
+    {"entity_removed": bool, "device_removed": bool, "notes": [str]}.
+    """
+    entity_registry = er.async_get(hass)
+    notes: list[str] = []
+    entity_removed = False
+    if platform and unique_id:
+        entity_id = entity_registry.async_get_entity_id(domain, platform, unique_id)
+        if entity_id is not None:
+            entity_registry.async_remove(entity_id)
+            await asyncio.sleep(0)
+            entity_removed = True
+    device_removed = False
+    if device_id:
+        device_removed, reason = await async_remove_device_if_unused(hass, device_id)
+        if reason:
+            notes.append(reason)
+    return {"entity_removed": entity_removed, "device_removed": device_removed, "notes": notes}
+
+
+# --- Changing an entity ID ---------------------------------------------------
+
+_ENTITY_ID_RE = re.compile(r"^[a-z_]+\.[a-z0-9_]+$")
+
+
+def async_validate_new_entity_id(hass: HomeAssistant, entity_id: str, new_entity_id: str) -> None:
+    """Raise ValueError (plain words) if entity_id can't be renamed to new_entity_id."""
+    registry = er.async_get(hass)
+    if registry.async_get(entity_id) is None:
+        raise ValueError(f"{entity_id} has no entity registry entry, so it can't be renamed")
+    if not _ENTITY_ID_RE.match(new_entity_id or ""):
+        raise ValueError("An entity ID is lower-case letters, digits and underscores, like light.kitchen_lamp")
+    if new_entity_id.split(".")[0] != entity_id.split(".")[0]:
+        raise ValueError(f"The entity ID must stay a {entity_id.split('.')[0]}. entity (the type can't change)")
+    if new_entity_id == entity_id:
+        raise ValueError("That is already this light's entity ID")
+    if registry.async_is_registered(new_entity_id) or hass.states.get(new_entity_id) is not None:
+        raise ValueError(f"{new_entity_id} is already in use")
 
 
 # --- Light-type taxonomy via HA Labels (PRD §15) ----------------------------

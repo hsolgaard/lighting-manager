@@ -610,6 +610,7 @@ async def test_replace_light_with_switch_over_websocket(
     plug = ent_reg.async_get_or_create("switch", "test_platform", "plug-1").entity_id
     api_hass.states.async_set(old, "unavailable")
     api_hass.states.async_set(plug, "off")
+    ent_reg.async_update_entity(plug, name="ZB plug")
     from custom_components.lighting_manager import registry
 
     registry.STATE_CLEAR_TIMEOUT = 0.2
@@ -639,4 +640,74 @@ async def test_replace_light_with_switch_over_websocket(
     assert response["result"]["converted"] is True
     assert response["result"]["created_from"] == plug
     assert ent_reg.async_get(old).platform == "switch_as_x"
-    assert ent_reg.async_get(old).name == "Lamp"
+    assert ent_reg.async_get(old).name == "ZB plug"
+
+
+async def test_replaced_and_entity_id_commands_over_websocket(
+    api_hass: HomeAssistant, hass_ws_client, hass_read_only_access_token
+) -> None:
+    import os
+    from types import SimpleNamespace
+
+    ent_reg = er.async_get(api_hass)
+    old = ent_reg.async_get_or_create("light", "test_platform", "old-1", suggested_object_id="lamp").entity_id
+    new = ent_reg.async_get_or_create("light", "test_platform", "new-1", suggested_object_id="zb_bulb").entity_id
+    api_hass.states.async_set(old, "on")
+    api_hass.states.async_set(new, "on")
+    from custom_components.lighting_manager import registry
+
+    registry.STATE_CLEAR_TIMEOUT = 0.2
+    coordinator = api_hass.data[DOMAIN]["coordinator"]
+    await coordinator.async_adopt_light(old, name="Lamp")
+    config_dir = api_hass.config.config_dir
+    os.makedirs(config_dir, exist_ok=True)
+    with open(os.path.join(config_dir, "scripts.yaml"), "w") as fh:
+        fh.write(f"s1:\n  sequence:\n    - service: light.turn_on\n      target: {{entity_id: {old}}}\n")
+    # Home Assistant 2026 keeps dashboards on an object, older versions in a dict.
+    api_hass.data["lovelace"] = SimpleNamespace(dashboards={})
+    client = await hass_ws_client(api_hass)
+
+    await client.send_json_auto_id({"type": f"{DOMAIN}/find_references", "entity_id": old})
+    found = (await client.receive_json())["result"]["references"]
+    assert [(r["kind"], r["label"], r["count"]) for r in found] == [("yaml", "scripts.yaml", 1)]
+
+    await client.send_json_auto_id(
+        {
+            "type": f"{DOMAIN}/replace_light",
+            "old_entity_id": old,
+            "new_entity_id": new,
+            "use_new_id": True,
+            "update_references": True,
+        }
+    )
+    replaced = await client.receive_json()
+    assert replaced["success"] is True
+    assert replaced["result"]["entity_id"] == new
+    assert replaced["result"]["kept_old_id"] is False
+    assert replaced["result"]["references"]["changed"] == ["scripts.yaml"]
+    assert new in open(os.path.join(config_dir, "scripts.yaml")).read()
+
+    await client.send_json_auto_id({"type": f"{DOMAIN}/list_replaced"})
+    rows = (await client.receive_json())["result"]["replaced"]
+    assert len(rows) == 1 and rows[0]["original_entity_id"] == old
+    # No device here, so the entity is all there is to remove.
+    await client.send_json_auto_id({"type": f"{DOMAIN}/remove_replaced", "replaced_id": rows[0]["id"]})
+    removed = await client.receive_json()
+    assert removed["success"] is True and removed["result"]["entity_removed"] is True
+    await client.send_json_auto_id({"type": f"{DOMAIN}/list_replaced"})
+    assert (await client.receive_json())["result"]["replaced"] == []
+
+    await client.send_json_auto_id({"type": f"{DOMAIN}/remove_replaced", "replaced_id": "nope"})
+    bad = await client.receive_json()
+    assert bad["success"] is False and bad["error"]["code"] == "invalid_format"
+
+    await client.send_json_auto_id(
+        {"type": f"{DOMAIN}/change_entity_id", "entity_id": new, "new_entity_id": "light.zb_bulb_final"}
+    )
+    changed = await client.receive_json()
+    assert changed["success"] is True and changed["result"]["entity_id"] == "light.zb_bulb_final"
+
+    ro = await hass_ws_client(api_hass, hass_read_only_access_token)
+    for command, extra in (("list_replaced", {}), ("find_references", {"entity_id": new})):
+        await ro.send_json_auto_id({"type": f"{DOMAIN}/{command}", **extra})
+        assert (await ro.receive_json())["error"]["code"] == "unauthorized"

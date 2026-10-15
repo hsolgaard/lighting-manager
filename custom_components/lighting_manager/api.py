@@ -47,6 +47,11 @@ def async_register_websocket_commands(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_set_scheduling_included)
     websocket_api.async_register_command(hass, ws_promote_switch)
     websocket_api.async_register_command(hass, ws_replace_light)
+    websocket_api.async_register_command(hass, ws_find_references)
+    websocket_api.async_register_command(hass, ws_change_entity_id)
+    websocket_api.async_register_command(hass, ws_list_replaced)
+    websocket_api.async_register_command(hass, ws_remove_replaced)
+    websocket_api.async_register_command(hass, ws_dismiss_replaced)
     websocket_api.async_register_command(hass, ws_start_countdown)
     websocket_api.async_register_command(hass, ws_cancel_countdown)
     websocket_api.async_register_command(hass, ws_list_countdowns)
@@ -216,6 +221,8 @@ async def ws_set_icon(hass: HomeAssistant, connection, msg) -> None:
         vol.Required("old_entity_id"): _LIGHT_OR_SWITCH,
         vol.Required("new_entity_id"): _LIGHT_OR_SWITCH,
         vol.Optional("convert_switch", default=False): bool,
+        vol.Optional("use_new_id", default=False): bool,
+        vol.Optional("update_references", default=False): bool,
     }
 )
 @websocket_api.async_response
@@ -223,12 +230,83 @@ async def ws_replace_light(hass: HomeAssistant, connection, msg) -> None:
     """PRD §24: the new light takes over the old light's entity ID and settings."""
     try:
         result = await _coordinator(hass).async_replace_light(
-            msg["old_entity_id"], msg["new_entity_id"], msg["convert_switch"]
+            msg["old_entity_id"],
+            msg["new_entity_id"],
+            msg["convert_switch"],
+            msg["use_new_id"],
+            msg["update_references"],
         )
     except ValueError as err:
         connection.send_error(msg["id"], "invalid_format", str(err))
         return
     connection.send_result(msg["id"], result)
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): f"{DOMAIN}/find_references",
+        vol.Required("entity_id"): _LIGHT_OR_SWITCH,
+    }
+)
+@websocket_api.async_response
+async def ws_find_references(hass: HomeAssistant, connection, msg) -> None:
+    """What mentions this entity ID (YAML, dashboards, schedules, helpers)?"""
+    rows = await _coordinator(hass).async_find_references(msg["entity_id"])
+    connection.send_result(msg["id"], {"references": rows})
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): f"{DOMAIN}/change_entity_id",
+        vol.Required("entity_id"): _LIGHT_OR_SWITCH,
+        vol.Required("new_entity_id"): str,
+        vol.Optional("update_references", default=False): bool,
+    }
+)
+@websocket_api.async_response
+async def ws_change_entity_id(hass: HomeAssistant, connection, msg) -> None:
+    try:
+        result = await _coordinator(hass).async_change_entity_id(
+            msg["entity_id"], msg["new_entity_id"], msg["update_references"]
+        )
+    except ValueError as err:
+        connection.send_error(msg["id"], "invalid_format", str(err))
+        return
+    connection.send_result(msg["id"], result)
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/list_replaced"})
+@websocket_api.async_response
+async def ws_list_replaced(hass: HomeAssistant, connection, msg) -> None:
+    """Lights that were replaced and can now be reviewed or removed."""
+    connection.send_result(msg["id"], {"replaced": await _coordinator(hass).async_list_replaced()})
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command(
+    {vol.Required("type"): f"{DOMAIN}/remove_replaced", vol.Required("replaced_id"): str}
+)
+@websocket_api.async_response
+async def ws_remove_replaced(hass: HomeAssistant, connection, msg) -> None:
+    try:
+        result = await _coordinator(hass).async_remove_replaced(msg["replaced_id"])
+    except ValueError as err:
+        connection.send_error(msg["id"], "invalid_format", str(err))
+        return
+    connection.send_result(msg["id"], result)
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command(
+    {vol.Required("type"): f"{DOMAIN}/dismiss_replaced", vol.Required("replaced_id"): str}
+)
+@websocket_api.async_response
+async def ws_dismiss_replaced(hass: HomeAssistant, connection, msg) -> None:
+    await _coordinator(hass).async_dismiss_replaced(msg["replaced_id"])
+    connection.send_result(msg["id"])
 
 
 @websocket_api.require_admin

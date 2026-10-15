@@ -120,7 +120,10 @@ const ACTION_SUCCESS_MESSAGES = {
   start_countdown: "Countdown started",
   cancel_countdown: "Countdown cancelled",
   promote_switch: "Switch added as a light",
-  replace_light: "Light replaced - schedules, room and settings carried over",
+  replace_light: "Light replaced - room and settings carried over",
+  change_entity_id: "Entity ID changed",
+  remove_replaced: "Removed from Home Assistant",
+  dismiss_replaced: "Hidden from the Replaced list",
 };
 
 const CSS_TEXT = `
@@ -206,13 +209,26 @@ const CSS_TEXT = `
     border-color: var(--primary-color);
   }
   .lm-btn:disabled { opacity: 0.5; cursor: default; }
+  /* Fixed to the top of the screen and above dialogs (z-index 10), so an
+   * error is never hidden behind a dialog or scrolled out of sight - on a
+   * phone the old in-page banner was invisible. It stays until dismissed. */
   .lm-error {
-    margin: 8px 16px 0;
-    padding: 8px 12px;
-    border-radius: 4px;
+    position: fixed;
+    top: 8px; left: 8px; right: 8px;
+    z-index: 30;
+    display: flex; align-items: flex-start; gap: 8px;
+    padding: 10px 12px;
+    border-radius: 6px;
     background: var(--error-color, #db4437);
     color: #fff;
-    font-size: 0.9em;
+    font-size: 0.95em;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.4);
+  }
+  .lm-error[hidden] { display: none; }
+  .lm-error .msg { flex: 1; word-break: break-word; }
+  .lm-error button {
+    background: transparent; border: 1px solid rgba(255,255,255,0.7); color: #fff;
+    border-radius: 4px; padding: 2px 10px; cursor: pointer; font: inherit;
   }
   .lm-main {
     flex: 1;
@@ -470,6 +486,7 @@ class LightingManagerPanel extends HTMLElement {
       this._inbox = inboxResult.items;
       this._lightsById = new Map(this._lights.map((l) => [l.entity_id, l]));
       this._clearError();
+      await this._refreshReplaced();
       this._renderView();
       if (this._selectedEntityId) {
         const light = this._lightsById.get(this._selectedEntityId);
@@ -500,7 +517,7 @@ class LightingManagerPanel extends HTMLElement {
   async _callAction(type, extra) {
     try {
       this._lastActionResult = await this._hass.callWS({ type: `lighting_manager/${type}`, ...extra });
-      this._clearError();
+      this._clearError(true);
       // Whatever was "dirty" has just been saved (or the action wasn't a
       // field edit at all, in which case this is a harmless no-op) - the
       // refresh below should rebuild the drawer from the now-current
@@ -512,7 +529,7 @@ class LightingManagerPanel extends HTMLElement {
       return true;
     } catch (err) {
       this._lastActionError = this._formatError(err);
-      this._showError(`${type} failed: ${this._lastActionError}`);
+      this._showError(`${type} failed: ${this._lastActionError}`, { sticky: true });
       return false;
     }
   }
@@ -593,11 +610,14 @@ class LightingManagerPanel extends HTMLElement {
       // light is this", this answers "what is going on in this room".
       rooms: this._makeTabButton("Rooms", "rooms"),
       inbox: this._makeTabButton("Inbox", "inbox"),
+      // Lights that were replaced, to review and remove for good.
+      replaced: this._makeTabButton("Replaced", "replaced"),
     };
     tabs.append(
       this._tabButtons.table,
       this._tabButtons.rooms,
-      this._tabButtons.inbox
+      this._tabButtons.inbox,
+      this._tabButtons.replaced
     );
     toolbar.appendChild(tabs);
 
@@ -654,7 +674,14 @@ class LightingManagerPanel extends HTMLElement {
     // Error banner
     this._errorEl = document.createElement("div");
     this._errorEl.className = "lm-error";
+    this._errorEl.setAttribute("role", "alert");
     this._errorEl.hidden = true;
+    this._errorMsgEl = document.createElement("span");
+    this._errorMsgEl.className = "msg";
+    const errorClose = document.createElement("button");
+    errorClose.textContent = "Dismiss";
+    errorClose.addEventListener("click", () => this._clearError(true));
+    this._errorEl.append(this._errorMsgEl, errorClose);
     root.appendChild(this._errorEl);
 
     // Main: body (table/inbox) + detail drawer, side by side on wide screens
@@ -706,7 +733,8 @@ class LightingManagerPanel extends HTMLElement {
     // no native search of its own) and for the Table view's plain-<table>
     // fallback, which also has no built-in search.
     const nativeTableActive = this._view === "table" && !!customElements.get("ha-data-table");
-    this._filterInput.hidden = nativeTableActive;
+    this._filterInput.hidden = nativeTableActive || this._view === "replaced";
+    this._areaFilterSelect.hidden = this._view === "replaced";
   }
 
   _makeButton(label, onClick, { primary = false, disabled = false } = {}) {
@@ -718,14 +746,20 @@ class LightingManagerPanel extends HTMLElement {
     return btn;
   }
 
-  _showError(message) {
-    this._errorEl.textContent = message;
+  // sticky = the error came from something the person just did, so the
+  // 15-second refresh must not quietly hide it; only Dismiss, or the next
+  // successful action, clears it.
+  _showError(message, { sticky = false } = {}) {
+    (this._errorMsgEl || this._errorEl).textContent = message;
+    this._errorSticky = sticky;
     this._errorEl.hidden = false;
   }
 
-  _clearError() {
+  _clearError(force = false) {
+    if (this._errorSticky && !force) return;
+    this._errorSticky = false;
     this._errorEl.hidden = true;
-    this._errorEl.textContent = "";
+    (this._errorMsgEl || this._errorEl).textContent = "";
   }
 
   _renderView() {
@@ -734,6 +768,8 @@ class LightingManagerPanel extends HTMLElement {
       this._renderTable();
     } else if (this._view === "rooms") {
       this._renderRooms();
+    } else if (this._view === "replaced") {
+      this._renderReplaced();
     } else {
       this._renderInbox();
     }
@@ -1741,12 +1777,17 @@ class LightingManagerPanel extends HTMLElement {
       replaceHint.style.color = "var(--secondary-text-color)";
       replaceHint.textContent =
         "Swapping in a new bulb, or moving to different technology (e.g. Wi-Fi to Zigbee)? " +
-        "Hand this light's name, room, schedules and settings to the new one.";
+        "Hand this light's room and settings to the new one. You can also change this light's entity ID " +
+        "and have the automations, scripts and dashboards that use it updated.";
       this._detailEl.appendChild(replaceHint);
       const replaceRow = document.createElement("div");
-      replaceRow.className = "lm-field";
+      replaceRow.className = "lm-field lm-field-row";
+      replaceRow.style.flexWrap = "wrap";
       replaceRow.appendChild(
         this._makeButton("Replace this light…", () => this._openReplaceDialog({ oldId: light.entity_id }))
+      );
+      replaceRow.appendChild(
+        this._makeButton("Change entity ID…", () => this._openChangeIdDialog(light))
       );
       this._detailEl.appendChild(replaceRow);
     }
@@ -1954,6 +1995,108 @@ class LightingManagerPanel extends HTMLElement {
     return m || "an unexpected error.";
   }
 
+  // A suggested entity ID for a light, made from a name the way Home Assistant does.
+  _suggestEntityId(name, domain = "light") {
+    const slug = String(name || "")
+      .toLowerCase()
+      .normalize("NFKD")
+      .replace(/[̀-ͯ]/g, "")
+      .replace(/[^a-z0-9]+/g, "_")
+      .replace(/^_+|_+$/g, "");
+    return `${domain}.${slug || "light"}`;
+  }
+
+  _makeRadio(group, value, checked) {
+    const row = document.createElement("label");
+    row.className = "lm-checkbox-row";
+    row.style.cssText = "align-items:flex-start;margin:6px 0;cursor:pointer;font-size:0.95em;color:inherit";
+    const input = document.createElement("input");
+    input.type = "radio";
+    input.name = group;
+    input.value = value;
+    input.checked = checked;
+    input.style.marginTop = "3px";
+    const text = document.createElement("span");
+    row.append(input, text);
+    return { row, input, text };
+  }
+
+  // Lists what mentions an entity ID. Returns how many places can be
+  // updated automatically.
+  _renderReferenceRows(container, rows) {
+    container.innerHTML = "";
+    if (!rows.length) {
+      const none = document.createElement("div");
+      none.textContent = "Nothing in your YAML files or dashboards refers to the old ID.";
+      container.appendChild(none);
+      return 0;
+    }
+    let auto = 0;
+    for (const r of rows) {
+      const line = document.createElement("div");
+      line.style.cssText = "margin:4px 0;padding:6px 8px;border:1px solid var(--divider-color);border-radius:4px";
+      const title = document.createElement("div");
+      title.textContent = `${r.label} (${r.count} ${r.count === 1 ? "place" : "places"})`;
+      line.appendChild(title);
+      const status = document.createElement("div");
+      status.className = "meta";
+      status.style.cssText = "color:var(--secondary-text-color);font-size:0.85em";
+      status.textContent = r.auto
+        ? "Can be updated for you."
+        : r.note || "Has to be changed by hand.";
+      line.appendChild(status);
+      container.appendChild(line);
+      if (r.auto) auto += 1;
+    }
+    return auto;
+  }
+
+  // Replace a dialog's content with a short "what happened" summary and an OK button.
+  _showDialogSummary(box, title, lines, onDone) {
+    box.innerHTML = "";
+    const heading = document.createElement("h2");
+    heading.textContent = title;
+    box.appendChild(heading);
+    for (const text of lines) {
+      const p = document.createElement("div");
+      p.style.margin = "6px 0";
+      p.textContent = text;
+      box.appendChild(p);
+    }
+    const row = document.createElement("div");
+    row.className = "lm-field-row";
+    row.style.marginTop = "16px";
+    row.appendChild(this._makeButton("OK", onDone, { primary: true }));
+    box.appendChild(row);
+  }
+
+  _referenceReportLines(report, remainingByHand) {
+    const lines = [];
+    if (report) {
+      if (report.changed && report.changed.length) {
+        lines.push(`Updated: ${report.changed.join(", ")}.`);
+        if (report.reloaded && report.reloaded.length) {
+          lines.push(`Reloaded: ${report.reloaded.join(", ")}.`);
+        }
+        if (report.needs_reload && report.needs_reload.length) {
+          lines.push(
+            `Reload YAML configuration (or restart Home Assistant) for these to take effect: ${report.needs_reload.join(", ")}.`
+          );
+        }
+        if (report.backup_dir) {
+          lines.push(`The originals were copied to ${report.backup_dir} first.`);
+        }
+      }
+      if (report.failed && report.failed.length) {
+        lines.push(`Could not update, so change by hand: ${report.failed.join(", ")}.`);
+      }
+    }
+    for (const r of remainingByHand || []) {
+      lines.push(`Still to do by hand: ${r.label}. ${r.note || ""}`.trim());
+    }
+    return lines;
+  }
+
   _openReplaceDialog({ oldId = null, newId = null } = {}) {
     const oldCandidates = this._lights
       .filter((l) => l.adopted && !l.ignored)
@@ -1979,8 +2122,8 @@ class LightingManagerPanel extends HTMLElement {
     intro.className = "meta";
     intro.style.color = "var(--secondary-text-color)";
     intro.textContent =
-      "The new light takes over the old light's name, room, settings and entity ID, so every schedule, " +
-      "automation, scene and dashboard that uses the old light keeps working with no changes.";
+      "The new light takes over the old light's room, icon, type and settings. You choose below whether it " +
+      "also takes over the old entity ID, so that schedules, automations, scenes and dashboards keep working.";
     box.appendChild(intro);
 
     const rules = document.createElement("p");
@@ -2024,14 +2167,38 @@ class LightingManagerPanel extends HTMLElement {
     const oldSelect = makeSelect("Old light (being replaced)", oldCandidates, oldId, "No managed lights yet");
     const newSelect = makeSelect("New light", newCandidates, newId, "No new lights waiting in the Inbox");
 
+    // Which entity ID the new light ends up with.
+    const idChoice = document.createElement("div");
+    idChoice.className = "lm-field";
+    idChoice.hidden = true;
+    const idLabel = document.createElement("label");
+    idLabel.textContent = "Entity ID";
+    idChoice.appendChild(idLabel);
+    const keepOpt = this._makeRadio("lm-replace-id", "keep", true);
+    const newOpt = this._makeRadio("lm-replace-id", "new", false);
+    idChoice.append(keepOpt.row, newOpt.row);
+    const refsBox = document.createElement("div");
+    refsBox.style.cssText = "margin:8px 0 0 24px;font-size:0.9em";
+    refsBox.hidden = true;
+    idChoice.appendChild(refsBox);
+    const updateRow = document.createElement("label");
+    updateRow.className = "lm-checkbox-row";
+    updateRow.style.cssText = "margin:8px 0 0 24px;font-size:0.95em;color:inherit;cursor:pointer";
+    const updateCheck = document.createElement("input");
+    updateCheck.type = "checkbox";
+    updateCheck.checked = true;
+    const updateText = document.createElement("span");
+    updateRow.append(updateCheck, updateText);
+    updateRow.hidden = true;
+    idChoice.appendChild(updateRow);
+    box.appendChild(idChoice);
+
     const preview = document.createElement("div");
     preview.className = "lm-field";
     preview.style.fontSize = "0.9em";
     box.appendChild(preview);
 
-    // Problems are shown here, inside the dialog, because the page-level
-    // error banner sits behind the overlay and is easy to miss (a failed
-    // Replace used to look like "nothing happened").
+    // Problems are shown here, inside the dialog, as well as in the error bar.
     const problem = document.createElement("div");
     problem.className = "lm-warning";
     problem.setAttribute("role", "alert");
@@ -2042,6 +2209,11 @@ class LightingManagerPanel extends HTMLElement {
       problem.hidden = !text;
     };
 
+    let refRows = []; // what the scan found for the old ID (only while "new ID" is chosen)
+    let refsFor = null;
+    let refsToken = 0;
+    const useNewId = () => newOpt.input.checked;
+
     const buttons = document.createElement("div");
     buttons.className = "lm-field-row";
     const confirmBtn = this._makeButton(
@@ -2049,26 +2221,48 @@ class LightingManagerPanel extends HTMLElement {
       async () => {
         confirmBtn.disabled = true;
         showProblem("");
-        const plan = this._replacePlan(
-          this._lightsById.get(oldSelect.value),
-          this._lightsById.get(newSelect.value)
-        );
+        const oldL = this._lightsById.get(oldSelect.value);
+        const newL = this._lightsById.get(newSelect.value);
+        const plan = this._replacePlan(oldL, newL);
         const payload = {
           old_entity_id: oldSelect.value,
           new_entity_id: newSelect.value,
         };
         if (plan.kind === "convert") payload.convert_switch = true;
+        const newId = useNewId();
+        if (newId) {
+          payload.use_new_id = true;
+          payload.update_references = updateCheck.checked && !updateRow.hidden;
+        }
         const ok = await this._callAction("replace_light", payload);
-        if (ok) {
-          overlay.remove();
-          this._selectEntity(oldSelect.value);
-        } else {
+        if (!ok) {
           showProblem(
             "That didn't work: " + this._friendlyReplaceError(this._lastActionError) +
               " Nothing has been changed."
           );
           confirmBtn.disabled = false;
+          return;
         }
+        const result = this._lastActionResult || {};
+        const finalId = result.entity_id || oldSelect.value;
+        const done = () => {
+          overlay.remove();
+          this._selectEntity(finalId);
+        };
+        const lines = [`“${newL.name}” is now ${finalId}.`];
+        if (result.converted) {
+          lines.push(`A light was created from the switch “${newL.name}”, which is now hidden behind it.`);
+        }
+        if (result.outcome === "disabled") {
+          lines.push("The old light was disabled, not deleted. Review it in the Replaced tab when you're ready to remove it.");
+        } else if (result.old_device_id) {
+          lines.push("The old light was removed. Its device may still be there: see the Replaced tab.");
+        }
+        if (!result.kept_old_id) {
+          const rest = refRows.filter((r) => !r.auto || !payload.update_references);
+          lines.push(...this._referenceReportLines(result.references, rest));
+        }
+        this._showDialogSummary(box, "Light replaced", lines, done);
       },
       { primary: true, disabled: true }
     );
@@ -2082,6 +2276,36 @@ class LightingManagerPanel extends HTMLElement {
       p.textContent = text;
       preview.appendChild(p);
     };
+
+    const loadRefs = async (oldL) => {
+      if (refsFor === oldL.entity_id && refRows) return;
+      const token = ++refsToken;
+      refsBox.hidden = false;
+      refsBox.textContent = "Looking for anything that uses the old ID…";
+      updateRow.hidden = true;
+      try {
+        const res = await this._hass.callWS({
+          type: "lighting_manager/find_references",
+          entity_id: oldL.entity_id,
+        });
+        if (token !== refsToken) return;
+        refRows = res.references || [];
+        refsFor = oldL.entity_id;
+      } catch (err) {
+        if (token !== refsToken) return;
+        refRows = [];
+        refsFor = null;
+        refsBox.textContent = `Could not scan: ${this._formatError(err)}`;
+        return;
+      }
+      if (!useNewId()) return;
+      const auto = this._renderReferenceRows(refsBox, refRows);
+      updateRow.hidden = auto === 0;
+      updateText.textContent =
+        `Update the ${auto} place${auto === 1 ? "" : "s"} that can be updated for you ` +
+        "(the originals are backed up first)";
+    };
+
     const updatePreview = () => {
       preview.innerHTML = "";
       showProblem("");
@@ -2089,6 +2313,9 @@ class LightingManagerPanel extends HTMLElement {
       const newL = this._lightsById.get(newSelect.value);
       confirmBtn.disabled = !(oldL && newL);
       confirmBtn.textContent = "Replace light";
+      idChoice.hidden = true;
+      refsBox.hidden = true;
+      updateRow.hidden = true;
       if (!oldL || !newL) return;
       const plan = this._replacePlan(oldL, newL);
       if (plan.kind === "blocked") {
@@ -2096,6 +2323,14 @@ class LightingManagerPanel extends HTMLElement {
         showProblem(plan.message);
         return;
       }
+      idChoice.hidden = false;
+      const ownId =
+        plan.kind === "convert" ? this._suggestEntityId(newL.name) : newL.entity_id;
+      keepOpt.text.textContent =
+        `Keep the old light's ID (${oldL.entity_id}). Everything that uses it keeps working, schedules included.`;
+      newOpt.text.textContent =
+        `Use the new light's own ID (${plan.kind === "convert" ? "something like " : ""}${ownId}). ` +
+        "Lighting Manager shows what uses the old ID and offers to update it.";
       if (plan.kind === "convert") {
         confirmBtn.textContent = "Create light and replace";
         const info = document.createElement("div");
@@ -2107,30 +2342,319 @@ class LightingManagerPanel extends HTMLElement {
         addLine(
           `1. The old light is renamed “${oldL.name} (replaced)”, and its ID becomes ${oldL.entity_id}_replaced.`
         );
-        addLine(`2. A new light is created from “${newL.name}”.`);
-        addLine(`3. The new light is named “${oldL.name}” and takes the ID ${oldL.entity_id}.`);
+        addLine(`2. A new light is created from “${newL.name}”, with the same name.`);
+        addLine(
+          useNewId()
+            ? "3. The new light keeps the ID Home Assistant gives it."
+            : `3. The new light takes the ID ${oldL.entity_id}.`
+        );
+      } else if (useNewId()) {
+        addLine(`“${newL.name}” keeps its own ID and name. The old light's ID ${oldL.entity_id} is retired.`);
       } else {
-        addLine(`“${newL.name}” will become ${oldL.entity_id}, and keep the name “${oldL.name}”.`);
+        addLine(`“${newL.name}” takes over the ID ${oldL.entity_id} and keeps its own name.`);
       }
       addLine(`Carried over: room (${this._areaName(oldL.area_id)}), icon, type and labels, and its dashboard, scheduling, tile and slider settings.`);
       if (oldL.schedule_count > 0) {
-        addLine(`${oldL.schedule_count} schedule${oldL.schedule_count === 1 ? "" : "s"} stay linked automatically.`);
+        addLine(
+          useNewId()
+            ? `${oldL.schedule_count} Scheduler schedule${oldL.schedule_count === 1 ? "" : "s"} use the old light. They can't be moved automatically: you'll pick the new light in the Scheduler card.`
+            : `${oldL.schedule_count} schedule${oldL.schedule_count === 1 ? "" : "s"} stay linked automatically.`
+        );
       }
       if (oldL.countdown_remaining_seconds !== null && oldL.countdown_remaining_seconds !== undefined) {
         addLine("The old light's running countdown will be cancelled.");
       }
       if (oldL.state === "unavailable") {
-        addLine("The old light isn't responding, so it will be removed from Home Assistant.");
+        addLine("The old light isn't responding, so its entity will be removed from Home Assistant. Any device it leaves behind shows up in the Replaced tab.");
       } else {
         addLine(
-          `The old light still works, so it is not deleted: it will be disabled and renamed ${oldL.entity_id}_replaced. ` +
-            "You can delete its device in its own integration whenever you're ready."
+          `The old light still works, so it is not deleted: it is disabled and renamed ${oldL.entity_id}_replaced. ` +
+            "It appears in the Replaced tab, where you can remove it completely when you're ready."
         );
       }
+      if (useNewId()) loadRefs(oldL);
     };
     oldSelect.addEventListener("change", updatePreview);
     newSelect.addEventListener("change", updatePreview);
+    keepOpt.input.addEventListener("change", updatePreview);
+    newOpt.input.addEventListener("change", updatePreview);
     updatePreview();
+    this.appendChild(overlay);
+  }
+
+  // -- Change entity ID --------------------------------------------------------
+
+  _openChangeIdDialog(light) {
+    const overlay = document.createElement("div");
+    overlay.className = "lm-overlay";
+    overlay.addEventListener("click", (e) => {
+      if (e.target === overlay) overlay.remove();
+    });
+    const box = document.createElement("div");
+    box.className = "lm-overlay-box";
+    overlay.appendChild(box);
+
+    const heading = document.createElement("h2");
+    heading.textContent = "Change entity ID";
+    box.appendChild(heading);
+    const hint = document.createElement("p");
+    hint.className = "meta";
+    hint.style.color = "var(--secondary-text-color)";
+    hint.textContent =
+      "Home Assistant doesn't update automations, scripts, scenes or dashboards when an entity ID changes. " +
+      "Lighting Manager looks for the old ID and can update what it safely can.";
+    box.appendChild(hint);
+
+    const field = document.createElement("div");
+    field.className = "lm-field";
+    const label = document.createElement("label");
+    label.textContent = `New entity ID (now ${light.entity_id})`;
+    field.appendChild(label);
+    const input = document.createElement("input");
+    input.type = "text";
+    input.style.width = "100%";
+    input.value = this._suggestEntityId(light.name, l_domain(light));
+    field.appendChild(input);
+    box.appendChild(field);
+
+    const refsBox = document.createElement("div");
+    refsBox.style.cssText = "margin-bottom:12px;font-size:0.9em";
+    refsBox.textContent = "Looking for anything that uses the current ID…";
+    box.appendChild(refsBox);
+    const updateRow = document.createElement("label");
+    updateRow.className = "lm-checkbox-row";
+    updateRow.style.cssText = "margin-bottom:12px;font-size:0.95em;color:inherit;cursor:pointer";
+    const updateCheck = document.createElement("input");
+    updateCheck.type = "checkbox";
+    updateCheck.checked = true;
+    const updateText = document.createElement("span");
+    updateRow.append(updateCheck, updateText);
+    updateRow.hidden = true;
+    box.appendChild(updateRow);
+
+    const problem = document.createElement("div");
+    problem.className = "lm-warning";
+    problem.setAttribute("role", "alert");
+    problem.hidden = true;
+    box.appendChild(problem);
+
+    let refRows = [];
+    const buttons = document.createElement("div");
+    buttons.className = "lm-field-row";
+    const confirmBtn = this._makeButton(
+      "Change entity ID",
+      async () => {
+        confirmBtn.disabled = true;
+        problem.hidden = true;
+        const newId = input.value.trim();
+        const doUpdate = updateCheck.checked && !updateRow.hidden;
+        const ok = await this._callAction("change_entity_id", {
+          entity_id: light.entity_id,
+          new_entity_id: newId,
+          update_references: doUpdate,
+        });
+        if (!ok) {
+          problem.textContent = "That didn't work: " + (this._lastActionError || "unexpected error") + " Nothing has been changed.";
+          problem.hidden = false;
+          confirmBtn.disabled = false;
+          return;
+        }
+        const result = this._lastActionResult || {};
+        const rest = refRows.filter((r) => !r.auto || !doUpdate);
+        const lines = [`The entity ID is now ${result.entity_id}.`, ...this._referenceReportLines(result.references, rest)];
+        this._showDialogSummary(box, "Entity ID changed", lines, () => {
+          overlay.remove();
+          this._selectEntity(result.entity_id);
+        });
+      },
+      { primary: true }
+    );
+    buttons.appendChild(confirmBtn);
+    buttons.appendChild(this._makeButton("Cancel", () => overlay.remove()));
+    box.appendChild(buttons);
+
+    this._hass
+      .callWS({ type: "lighting_manager/find_references", entity_id: light.entity_id })
+      .then((res) => {
+        refRows = res.references || [];
+        const auto = this._renderReferenceRows(refsBox, refRows);
+        updateRow.hidden = auto === 0;
+        updateText.textContent =
+          `Update the ${auto} place${auto === 1 ? "" : "s"} that can be updated for you ` +
+          "(the originals are backed up first)";
+      })
+      .catch((err) => {
+        refsBox.textContent = `Could not scan: ${this._formatError(err)}`;
+      });
+    this.appendChild(overlay);
+  }
+
+  // -- Replaced tab ---------------------------------------------------------------
+
+  async _refreshReplaced() {
+    if (this._hass && this._hass.user && this._hass.user.is_admin === false) {
+      this._replaced = [];
+      this._updateReplacedTab();
+      return;
+    }
+    try {
+      const res = await this._hass.callWS({ type: "lighting_manager/list_replaced" });
+      this._replaced = res.replaced || [];
+    } catch (err) {
+      this._replaced = this._replaced || [];
+    }
+    this._updateReplacedTab();
+  }
+
+  _updateReplacedTab() {
+    const btn = this._tabButtons && this._tabButtons.replaced;
+    if (!btn) return;
+    const n = (this._replaced || []).length;
+    btn.textContent = n ? `Replaced (${n})` : "Replaced";
+    if (this._hass && this._hass.user && this._hass.user.is_admin === false) btn.hidden = true;
+  }
+
+  _renderReplaced() {
+    this._bodyEl.innerHTML = "";
+    const rows = this._replaced || [];
+    const intro = document.createElement("p");
+    intro.className = "meta";
+    intro.style.cssText = "color:var(--secondary-text-color);margin:0 0 12px";
+    intro.textContent =
+      "Lights that were replaced. They are no longer managed here. Review each one, then remove it " +
+      "from Home Assistant completely when you're sure you don't need it.";
+    this._bodyEl.appendChild(intro);
+    if (!rows.length) {
+      const empty = document.createElement("div");
+      empty.className = "lm-empty";
+      empty.textContent = "Nothing waiting. Lights you replace will appear here.";
+      this._bodyEl.appendChild(empty);
+      return;
+    }
+    for (const r of rows) this._bodyEl.appendChild(this._renderReplacedRow(r));
+  }
+
+  _renderReplacedRow(r) {
+    const row = document.createElement("div");
+    row.className = "lm-inbox-item";
+    row.style.cursor = "default";
+
+    const name = document.createElement("span");
+    name.className = "name";
+    const title = document.createElement("div");
+    title.textContent = r.old_name || r.original_entity_id || "Replaced light";
+    name.appendChild(title);
+    const meta = (text) => {
+      const el = document.createElement("div");
+      el.className = "meta";
+      el.textContent = text;
+      name.appendChild(el);
+    };
+    const when = r.replaced_at ? new Date(r.replaced_at).toLocaleDateString() : "";
+    meta(
+      `Replaced by ${r.replaced_by_name || r.replaced_by_entity_id || "another light"}` +
+        (r.replaced_by_entity_id ? ` (${r.replaced_by_entity_id})` : "") +
+        (when ? ` on ${when}` : "")
+    );
+    meta(
+      r.entity_present
+        ? `Still in Home Assistant as ${r.entity_id_now}${r.outcome === "disabled" ? " (disabled)" : ""}`
+        : "The light itself is already removed"
+    );
+    if (r.device_present) {
+      let deviceText = `Device: ${r.device_name || "unnamed"}${r.platform ? ` (${r.platform})` : ""}`;
+      if (r.device_shared_with && r.device_shared_with.length) {
+        deviceText += `. Also used by ${r.device_shared_with.join(", ")}, so the device will be kept.`;
+      }
+      meta(deviceText);
+    } else if (r.entity_present) {
+      meta("No device");
+    }
+    row.appendChild(name);
+
+    const actions = document.createElement("span");
+    actions.className = "actions";
+    actions.appendChild(
+      this._makeButton("Remove completely…", () => this._openRemoveReplacedDialog(r), { primary: true })
+    );
+    actions.appendChild(
+      this._makeButton("Keep (hide)", async () => {
+        await this._callAction("dismiss_replaced", { replaced_id: r.id });
+        await this._refreshReplaced();
+        this._renderView();
+      })
+    );
+    row.appendChild(actions);
+    return row;
+  }
+
+  _openRemoveReplacedDialog(r) {
+    const overlay = document.createElement("div");
+    overlay.className = "lm-overlay";
+    overlay.addEventListener("click", (e) => {
+      if (e.target === overlay) overlay.remove();
+    });
+    const box = document.createElement("div");
+    box.className = "lm-overlay-box";
+    overlay.appendChild(box);
+    const heading = document.createElement("h2");
+    heading.textContent = "Remove completely?";
+    box.appendChild(heading);
+    const what = [];
+    if (r.entity_present) what.push(`the light ${r.entity_id_now}`);
+    if (r.device_present && !(r.device_shared_with && r.device_shared_with.length)) {
+      what.push(`its device “${r.device_name || "unnamed"}”`);
+    }
+    const p = document.createElement("p");
+    p.textContent =
+      `This permanently deletes ${what.join(" and ") || "what is left of it"} from Home Assistant. ` +
+      "This can't be undone.";
+    box.appendChild(p);
+    if (r.platform && r.device_present) {
+      const note = document.createElement("p");
+      note.className = "meta";
+      note.style.color = "var(--secondary-text-color)";
+      note.textContent =
+        `Home Assistant only deletes a device if its integration (${r.platform}) allows it. ` +
+        "If it doesn't, you'll be told, and the device has to be removed where it is managed.";
+      box.appendChild(note);
+    }
+    const problem = document.createElement("div");
+    problem.className = "lm-warning";
+    problem.setAttribute("role", "alert");
+    problem.hidden = true;
+    box.appendChild(problem);
+    const buttons = document.createElement("div");
+    buttons.className = "lm-field-row";
+    const go = this._makeButton(
+      "Remove completely",
+      async () => {
+        go.disabled = true;
+        const ok = await this._callAction("remove_replaced", { replaced_id: r.id });
+        if (!ok) {
+          problem.textContent = "That didn't work: " + (this._lastActionError || "unexpected error");
+          problem.hidden = false;
+          go.disabled = false;
+          return;
+        }
+        const res = this._lastActionResult || {};
+        const lines = [];
+        lines.push(res.entity_removed ? "The light was removed." : "The light was already gone.");
+        if (r.device_present) {
+          lines.push(res.device_removed ? "Its device was removed." : "Its device was not removed.");
+        }
+        for (const n of res.notes || []) lines.push(n);
+        await this._refreshReplaced();
+        this._showDialogSummary(box, "Done", lines, () => {
+          overlay.remove();
+          this._renderView();
+        });
+      },
+      { primary: true }
+    );
+    buttons.appendChild(go);
+    buttons.appendChild(this._makeButton("Cancel", () => overlay.remove()));
+    box.appendChild(buttons);
     this.appendChild(overlay);
   }
 

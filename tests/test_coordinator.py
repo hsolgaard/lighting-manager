@@ -465,8 +465,8 @@ async def test_replace_dead_light_takes_over_id_and_settings(
     assert entry.unique_id == "new-1"
     assert ent_reg.async_get(new) is None
     assert ent_reg.async_get(result["old_entity_id_now"]) is None
-    # Registry settings carried over.
-    assert entry.name == "Kitchen lamp"
+    # Registry settings carried over; the new light keeps its own name.
+    assert entry.name is None
     assert entry.icon == "mdi:floor-lamp"
     assert entry.area_id == area.id
     assert registry.get_light_type(hass, old) == "table_lamp"
@@ -570,8 +570,9 @@ async def test_replace_rejects_bad_requests(
 # -- replacing a light with a switch (a plug): the light is created for you ----
 
 
-async def _promoted_plug(hass, coordinator, entity_id="switch.plug", unique_id="plug-1"):
+async def _promoted_plug(hass, coordinator, entity_id="switch.plug", unique_id="plug-1", name="ZB-Lounge-plug-lamp2"):
     plug = _register_light(hass, entity_id, unique_id)
+    er.async_get(hass).async_update_entity(plug, name=name)
     await coordinator.async_promote_switch(plug)
     return plug
 
@@ -589,7 +590,7 @@ async def test_replace_with_switch_requires_explicit_conversion(
     assert er.async_get(hass).async_get(old).unique_id == "old-1"
 
 
-async def test_replace_light_with_switch_creates_light_with_old_name_and_id(
+async def test_replace_light_with_switch_creates_light_with_old_id_and_own_name(
     hass: HomeAssistant, coordinator: LightingManagerCoordinator
 ) -> None:
     old, area = await _adopted_old_light(hass, coordinator, state="on")
@@ -602,10 +603,11 @@ async def test_replace_light_with_switch_creates_light_with_old_name_and_id(
     assert result["converted"] is True
     assert result["created_from"] == plug
     assert result["outcome"] == "disabled"
-    # The new light owns the old entity ID, name, icon and room...
+    # The new light owns the old entity ID, icon and room, and keeps the
+    # plug's own name (a naming standard such as ZB-<room>-<type> survives)...
     new_light = ent_reg.async_get(old)
     assert new_light.platform == "switch_as_x"
-    assert new_light.name == "Kitchen lamp"
+    assert new_light.name == "ZB-Lounge-plug-lamp2"
     assert new_light.icon == "mdi:floor-lamp"
     assert new_light.area_id == area.id
     assert registry.get_light_type(hass, old) == "table_lamp"
@@ -684,3 +686,243 @@ async def test_failed_light_creation_leaves_old_light_untouched(
     assert er.async_get(hass).async_get(f"{old}_replaced") is None
     assert coordinator.store.get_light("test_platform:old-1").adopted
     assert coordinator.store.get_light("test_platform:plug-1").promoted_switch
+
+
+# -- naming, the Replaced list, and changing entity IDs -------------------------
+
+import json
+import os
+
+from homeassistant.helpers import device_registry as dr
+from pytest_homeassistant_custom_component.common import (
+    MockConfigEntry,
+    MockModule,
+    mock_integration,
+)
+
+
+async def _old_light_on_device(hass, coordinator, *, state="on", removable=True):
+    """An adopted old light that lives on a device of its own (like a Tuya/ZHA bulb)."""
+    from homeassistant.helpers import area_registry as ar
+
+    area = ar.async_get(hass).async_create("Kitchen")
+    seen = {}
+
+    async def _allow(_hass, _entry, _device):
+        seen["called"] = True
+        return removable
+
+    mock_integration(hass, MockModule("test_platform", async_remove_config_entry_device=_allow))
+    entry = MockConfigEntry(domain="test_platform")
+    entry.add_to_hass(hass)
+    entry.supports_remove_device = True
+    device = dr.async_get(hass).async_get_or_create(
+        config_entry_id=entry.entry_id, identifiers={("test_platform", "bulb-1")}, name="Old bulb"
+    )
+    ent = er.async_get(hass).async_get_or_create(
+        "light", "test_platform", "old-1", suggested_object_id="kitchen_lamp",
+        config_entry=entry, device_id=device.id,
+    )
+    hass.states.async_set(ent.entity_id, state)
+    await coordinator.async_adopt_light(ent.entity_id, name="Kitchen lamp", area_id=area.id, light_type="table_lamp")
+    return ent.entity_id, device, seen
+
+
+async def test_replaced_light_is_listed_and_can_be_removed_with_its_device(
+    hass: HomeAssistant, coordinator: LightingManagerCoordinator
+) -> None:
+    old, device, seen = await _old_light_on_device(hass, coordinator)
+    new = _register_light(hass, "light.zigbee_bulb_7", "new-1")
+
+    await coordinator.async_replace_light(old, new)
+    rows = await coordinator.async_list_replaced()
+
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["old_name"] == "Kitchen lamp"
+    assert row["original_entity_id"] == old
+    assert row["entity_present"] and row["device_present"]
+    assert row["entity_id_now"] == f"{old}_replaced"
+    assert row["device_name"] == "Old bulb"
+    assert row["replaced_by_entity_id"] == old  # new light took the old ID
+    # The old light is un-adopted: it is not in the managed lights list.
+    assert not any(l.adopted and l.entity_id == row["entity_id_now"] for l in coordinator.async_list_lights())
+
+    result = await coordinator.async_remove_replaced(row["id"])
+
+    assert result["entity_removed"] and result["device_removed"] and not result["notes"]
+    assert seen["called"]
+    assert er.async_get(hass).async_get_entity_id("light", "test_platform", "old-1") is None
+    assert dr.async_get(hass).async_get(device.id) is None
+    assert await coordinator.async_list_replaced() == []
+
+
+async def test_removal_keeps_a_device_the_integration_refuses_to_delete(
+    hass: HomeAssistant, coordinator: LightingManagerCoordinator
+) -> None:
+    old, device, _ = await _old_light_on_device(hass, coordinator, removable=False)
+    new = _register_light(hass, "light.zigbee_bulb_7", "new-1")
+    await coordinator.async_replace_light(old, new)
+    row = (await coordinator.async_list_replaced())[0]
+
+    result = await coordinator.async_remove_replaced(row["id"])
+
+    assert result["entity_removed"] is True
+    assert result["device_removed"] is False
+    assert "refused" in result["notes"][0]
+    assert dr.async_get(hass).async_get(device.id) is not None
+    # Still listed, now as a device only.
+    rows = await coordinator.async_list_replaced()
+    assert rows[0]["entity_present"] is False and rows[0]["device_present"] is True
+
+
+async def test_removal_never_deletes_a_device_that_other_entities_use(
+    hass: HomeAssistant, coordinator: LightingManagerCoordinator
+) -> None:
+    old, device, _ = await _old_light_on_device(hass, coordinator)
+    er.async_get(hass).async_get_or_create(
+        "sensor", "test_platform", "other-1", suggested_object_id="bulb_power", device_id=device.id
+    )
+    new = _register_light(hass, "light.zigbee_bulb_7", "new-1")
+    await coordinator.async_replace_light(old, new)
+    row = (await coordinator.async_list_replaced())[0]
+    assert row["device_shared_with"] == ["sensor.bulb_power"]
+
+    result = await coordinator.async_remove_replaced(row["id"])
+
+    assert result["entity_removed"] is True and result["device_removed"] is False
+    assert "still used" in result["notes"][0]
+    assert dr.async_get(hass).async_get(device.id) is not None
+
+
+async def test_dismissing_a_replaced_light_deletes_nothing(
+    hass: HomeAssistant, coordinator: LightingManagerCoordinator
+) -> None:
+    old, device, _ = await _old_light_on_device(hass, coordinator)
+    new = _register_light(hass, "light.zigbee_bulb_7", "new-1")
+    await coordinator.async_replace_light(old, new)
+    row = (await coordinator.async_list_replaced())[0]
+
+    await coordinator.async_dismiss_replaced(row["id"])
+
+    assert await coordinator.async_list_replaced() == []
+    assert er.async_get(hass).async_get_entity_id("light", "test_platform", "old-1") is not None
+    assert dr.async_get(hass).async_get(device.id) is not None
+
+
+async def test_replace_with_new_id_keeps_the_new_lights_own_id(
+    hass: HomeAssistant, coordinator: LightingManagerCoordinator
+) -> None:
+    old, area = await _adopted_old_light(hass, coordinator, state="on")
+    plug = await _promoted_plug(hass, coordinator)
+    ent_reg = er.async_get(hass)
+    await coordinator.store.async_set_area_light_order(area.id, [old, "light.other"])
+
+    result = await coordinator.async_replace_light(old, plug, convert_switch=True, use_new_id=True)
+    await hass.async_block_till_done()
+
+    new_id = result["entity_id"]
+    assert result["kept_old_id"] is False
+    assert new_id != old and new_id.startswith("light.")
+    assert result["previous_entity_id"] == old
+    # The new light keeps its own ID and the plug's name; the old one moved aside.
+    assert ent_reg.async_get(new_id).platform == "switch_as_x"
+    assert ent_reg.async_get(new_id).name == "ZB-Lounge-plug-lamp2"
+    assert ent_reg.async_get(result["old_entity_id_now"]).unique_id == "old-1"
+    assert ent_reg.async_get(old) is None
+    # Lighting Manager's own settings and plain-ID lists follow the new ID.
+    record = coordinator.store.get_light(registry.stable_key_for_entity(hass, new_id))
+    assert record.adopted and record.tile_width == "full"
+    assert record.last_known_entity_id == new_id
+    assert coordinator.store.get_area_light_order(area.id) == [new_id, "light.other"]
+
+
+async def test_find_and_rewrite_references_in_yaml_files_and_dashboards(
+    hass: HomeAssistant, coordinator: LightingManagerCoordinator
+) -> None:
+    config_dir = hass.config.config_dir
+    os.makedirs(config_dir, exist_ok=True)
+    automations = os.path.join(config_dir, "automations.yaml")
+    with open(automations, "w", encoding="utf-8") as fh:
+        fh.write(
+            "- alias: Lamp\n  action:\n    - service: light.turn_on\n"
+            "      target:\n        entity_id: light.cabinet_lamp\n"
+            "    - service: light.turn_on\n      target:\n        entity_id: light.cabinet_lamp_2\n"
+            "  condition: \"{{ is_state('light.cabinet_lamp','on') }}\"  # keep this comment\n"
+        )
+    os.makedirs(os.path.join(config_dir, "custom_components"), exist_ok=True)
+    with open(os.path.join(config_dir, "custom_components", "x.yaml"), "w") as fh:
+        fh.write("entity_id: light.cabinet_lamp\n")  # never touched
+
+    saved = {}
+
+    class FakeDashboard:
+        mode = "storage"
+
+        async def async_load(self, force):
+            return {"title": "Home", "views": [{"cards": [{"type": "light", "entity": "light.cabinet_lamp"}]}]}
+
+        async def async_save(self, config):
+            saved["config"] = config
+
+    hass.data["lovelace"] = {"dashboards": {None: FakeDashboard()}}
+
+    rows = await coordinator.async_find_references("light.cabinet_lamp")
+    by_kind = {(r["kind"], r["label"]): r for r in rows}
+    assert by_kind[("yaml", "automations.yaml")]["count"] == 2  # not light.cabinet_lamp_2
+    assert by_kind[("dashboard", "Dashboard: Home")]["count"] == 1
+    assert not any("custom_components" in r["label"] for r in rows)
+
+    from custom_components.lighting_manager import references
+
+    report = await references.async_rewrite_references(hass, "light.cabinet_lamp", "light.zb_plug")
+
+    text = open(automations, encoding="utf-8").read()
+    assert "light.zb_plug" in text and text.count("light.zb_plug") == 2
+    assert "light.cabinet_lamp_2" in text  # a different light, untouched
+    assert "# keep this comment" in text
+    assert "light.cabinet_lamp'" not in text
+    assert report["changed"] == ["automations.yaml", "Dashboard: Home"]
+    assert saved["config"]["views"][0]["cards"][0]["entity"] == "light.zb_plug"
+    # Everything that was changed was copied to a backup first.
+    backup = os.path.join(config_dir, report["backup_dir"])
+    assert "light.cabinet_lamp\n" in open(os.path.join(backup, "automations.yaml")).read()
+    assert json.load(open(os.path.join(backup, "dashboards", "overview.json")))["title"] == "Home"
+    assert open(os.path.join(config_dir, "custom_components", "x.yaml")).read() == "entity_id: light.cabinet_lamp\n"
+
+
+async def test_references_reports_what_it_cannot_change(
+    hass: HomeAssistant, coordinator: LightingManagerCoordinator
+) -> None:
+    entry = MockConfigEntry(domain="group", title="Lamps", options={"entities": ["light.cabinet_lamp"]})
+    entry.add_to_hass(hass)
+
+    rows = await coordinator.async_find_references("light.cabinet_lamp")
+
+    helper = [r for r in rows if r["kind"] == "helper"]
+    assert helper and helper[0]["auto"] is False
+
+
+async def test_change_entity_id_renames_and_updates_lighting_manager_lists(
+    hass: HomeAssistant, coordinator: LightingManagerCoordinator
+) -> None:
+    old, area = await _adopted_old_light(hass, coordinator, state="on")
+    await coordinator.store.async_set_area_light_order(area.id, [old])
+    hass.states.async_remove(old)
+
+    with pytest.raises(ValueError, match="already"):
+        await coordinator.async_change_entity_id(old, old, False)
+    with pytest.raises(ValueError, match="type"):
+        await coordinator.async_change_entity_id(old, "switch.kitchen_plug", False)
+    with pytest.raises(ValueError, match="lower-case"):
+        await coordinator.async_change_entity_id(old, "light.Kitchen Lamp", False)
+    other = _register_light(hass, "light.taken", "other-1")
+    with pytest.raises(ValueError, match="in use"):
+        await coordinator.async_change_entity_id(old, other, False)
+
+    result = await coordinator.async_change_entity_id(old, "light.zb_kitchen_lamp", False)
+
+    assert result["entity_id"] == "light.zb_kitchen_lamp"
+    assert er.async_get(hass).async_get("light.zb_kitchen_lamp").unique_id == "old-1"
+    assert coordinator.store.get_area_light_order(area.id) == ["light.zb_kitchen_lamp"]
+    assert coordinator.store.get_light("test_platform:old-1").adopted

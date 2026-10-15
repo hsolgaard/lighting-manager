@@ -186,16 +186,47 @@ light that still works is **disabled and renamed** (for example
 re-create it as a new light after a restart. Delete its device later when you
 are ready.
 
+**Which entity ID does the new light get?** The Replace dialog asks.
+
+- **Keep the old light's ID** (the default). The new light takes over the old
+  ID, so every schedule, automation, scene and dashboard keeps working with no
+  edits. The new light keeps its own name.
+- **Use the new light's own ID.** Home Assistant never rewrites automations,
+  scripts, scenes or dashboards when an entity ID changes, so Lighting Manager
+  scans for the old ID and lists everything it finds. Tick **Update** and it
+  rewrites your YAML files (including the automations, scripts and scenes you
+  made in the UI) and your UI dashboards, reloads automations, scripts and
+  scenes, and copies every file it changed to `lighting_manager_backups/`
+  first. Scheduler schedules and helpers that store a plain entity ID are
+  listed but can't be changed for you; you re-point those by hand.
+
+You can do the same on any light later with **Change entity ID...** in its
+panel.
+
 **Replacing a light with a smart plug.** A plug is a `switch`, and Home
-Assistant never lets an entity change type, so a switch cannot take a light's
-entity ID directly. Lighting Manager gets round this for you. First use
-**Add a switch as a light** on the plug, so it shows up in the Inbox. Then
-choose the old light and the plug in the Replace dialog and click **Create
-light and replace**. The old light is renamed "Name (replaced)", a light is
-created from the plug with Home Assistant's own *Switch as X* helper, and that
-new light takes the old light's name and entity ID. The plug itself is kept but
-hidden behind the new light. The other way round (a light replacing a switch)
-can't be done, and the dialog says so.
+Assistant never lets an entity change type, so a switch cannot simply take a
+light's place. Lighting Manager gets round this for you. First use **Add a
+switch as a light** on the plug, so it shows up in the Inbox. Then choose the old
+light and the plug in the Replace dialog and click **Create light and
+replace**. The old light is renamed "Name (replaced)", a light is created from
+the plug with Home Assistant's own *Switch as X* helper, and the new light keeps
+the plug's name (so a naming standard such as `ZB-Room-Type` survives). The plug
+itself is kept but hidden behind the new light. The other way round (a light
+replacing a switch) can't be done, and the dialog says so.
+
+### Review and remove replaced lights
+
+Every light you replace is listed in the **Replaced** tab. The old light is no
+longer managed by Lighting Manager, but it is still in Home Assistant (disabled)
+until you decide. For each one you can **Remove completely**, which deletes the
+old light and, when nothing else uses it, its device. Or **Keep (hide)** to stop
+listing it without deleting anything.
+
+Home Assistant only lets an integration's device be deleted if that integration
+allows it. ZHA, MQTT and Matter normally do. A cloud integration such as Tuya may
+not, and may bring the device back at its next reload; Lighting Manager tells
+you when that happens, and the device then has to be removed where it is
+managed.
 
 <img width="535" height="317" alt="image" src="https://github.com/user-attachments/assets/01907c46-4ba5-45ff-b493-73d05f41485e" />
 
