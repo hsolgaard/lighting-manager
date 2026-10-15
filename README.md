@@ -191,7 +191,9 @@ are ready.
 - **Keep the old light's ID** (the default). The new light takes over the old
   ID, so every schedule, automation, scene and dashboard keeps working with no
   edits. The new light keeps its own name.
-- **Use the new light's own ID.** Home Assistant never rewrites automations,
+- **Use the new light's own ID.** The new light gets the old light's friendly
+  name (and its icon, room, type and settings), so it reads the same as before
+  while its ID follows your own naming standard. Home Assistant never rewrites automations,
   scripts, scenes or dashboards when an entity ID changes, so Lighting Manager
   scans for the old ID and lists everything it finds. Tick **Update** and it
   rewrites your YAML files (including the automations, scripts and scenes you

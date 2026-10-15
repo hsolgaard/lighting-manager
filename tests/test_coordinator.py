@@ -825,9 +825,10 @@ async def test_replace_with_new_id_keeps_the_new_lights_own_id(
     assert result["kept_old_id"] is False
     assert new_id != old and new_id.startswith("light.")
     assert result["previous_entity_id"] == old
-    # The new light keeps its own ID and the plug's name; the old one moved aside.
+    # The new light keeps its own ID but is named like the old light; the old one moved aside.
     assert ent_reg.async_get(new_id).platform == "switch_as_x"
-    assert ent_reg.async_get(new_id).name == "ZB-Lounge-plug-lamp2"
+    assert ent_reg.async_get(new_id).name == "Kitchen lamp"
+    assert coordinator.store.get_light(registry.stable_key_for_entity(hass, new_id)).last_known_name == "Kitchen lamp"
     assert ent_reg.async_get(result["old_entity_id_now"]).unique_id == "old-1"
     assert ent_reg.async_get(old) is None
     # Lighting Manager's own settings and plain-ID lists follow the new ID.

@@ -335,6 +335,7 @@ async def async_take_over_entity_id(
     drop_type_labels: bool,
     convert_switch: bool = False,
     keep_new_id: bool = False,
+    new_name: str | None = None,
 ) -> dict:
     """Move new_entity_id onto old_entity_id's ID and retire the old entry.
 
@@ -342,6 +343,9 @@ async def async_take_over_entity_id(
     light has been renamed out of the way, a light is created from that
     switch (Home Assistant's "Switch as X" helper) and the new light is
     the one that takes over.
+
+    With new_name set, the newcomer is also given that friendly name (used
+    to carry the old light's name over when it keeps its own entity ID).
 
     With keep_new_id=True the newcomer keeps its own entity ID instead of
     taking the old one (the caller is then responsible for re-pointing
@@ -404,6 +408,8 @@ async def async_take_over_entity_id(
     changes: dict = {} if keep_new_id else {"new_entity_id": old_entity_id}
     if icon:
         changes["icon"] = icon
+    if new_name:
+        changes["name"] = new_name
     known = set(_label_id_cache(hass).values())
     labels = set(new_entry.labels)
     if drop_type_labels:

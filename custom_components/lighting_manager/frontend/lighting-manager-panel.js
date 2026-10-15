@@ -2358,7 +2358,7 @@ class LightingManagerPanel extends HTMLElement {
         `Keep the old light's ID (${oldL.entity_id}). Everything that uses it keeps working, schedules included.`;
       newOpt.text.textContent =
         `Use the new light's own ID (${plan.kind === "convert" ? "something like " : ""}${ownId}). ` +
-        "Lighting Manager shows what uses the old ID and offers to update it.";
+        "The new light is given the old light's name, and Lighting Manager shows what uses the old ID and offers to update it.";
       if (plan.kind === "convert") {
         confirmBtn.textContent = "Create light and replace";
         const info = document.createElement("div");
@@ -2370,14 +2370,20 @@ class LightingManagerPanel extends HTMLElement {
         addLine(
           `1. The old light is renamed “${oldL.name} (replaced)”, and its ID becomes ${oldL.entity_id}_replaced.`
         );
-        addLine(`2. A new light is created from “${newL.name}”, with the same name.`);
+        addLine(
+          useNewId()
+            ? `2. A new light is created from “${newL.name}” and named “${oldL.name}”.`
+            : `2. A new light is created from “${newL.name}”, with the same name.`
+        );
         addLine(
           useNewId()
             ? "3. The new light keeps the ID Home Assistant gives it."
             : `3. The new light takes the ID ${oldL.entity_id}.`
         );
       } else if (useNewId()) {
-        addLine(`“${newL.name}” keeps its own ID and name. The old light's ID ${oldL.entity_id} is retired.`);
+        addLine(
+          `“${newL.name}” keeps its own ID and is renamed “${oldL.name}”. The old light's ID ${oldL.entity_id} is retired.`
+        );
       } else {
         addLine(`“${newL.name}” takes over the ID ${oldL.entity_id} and keeps its own name.`);
       }

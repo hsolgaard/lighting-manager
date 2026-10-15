@@ -510,6 +510,11 @@ class LightingManagerCoordinator:
         # naming standard); only the entity ID is carried over from the old light.
         new_state = self.hass.states.get(new_entity_id)
         new_name = new_entry.name or new_entry.original_name or (new_state.name if new_state else None)
+        # With the new light's own entity ID (e.g. a ZB-<room>-<type> ID), the friendly
+        # name is the old light's, so dashboards and the UI read the same as before.
+        carried_name = old_name if use_new_id else None
+        if carried_name:
+            new_name = carried_name
         old_area = registry.async_get_effective_area(self.hass, old_entity_id)
         new_area = registry.async_get_effective_area(self.hass, new_entity_id)
         known_type_labels = set(registry._label_id_cache(self.hass).values())
@@ -536,6 +541,7 @@ class LightingManagerCoordinator:
             drop_type_labels=old_has_type,
             convert_switch=converting,
             keep_new_id=use_new_id,
+            new_name=carried_name,
         )
         final_id = result["new_entity_id_now"]
         if converting:
