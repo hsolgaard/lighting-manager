@@ -301,3 +301,36 @@ async def test_set_entity_icon_needs_a_registry_entry(hass: HomeAssistant) -> No
         await registry.async_set_entity_icon(hass, "light.yaml_only", "mdi:lamp")
 
     assert registry.async_get_icon_override(hass, "light.yaml_only") is None
+
+
+async def test_area_falls_back_to_device_when_entity_may_not_have_one(hass: HomeAssistant) -> None:
+    """Home Assistant 2026 refuses an area on an entity that has no name of its own."""
+    from unittest.mock import patch
+
+    from homeassistant.helpers import area_registry as ar
+    from homeassistant.helpers import device_registry as dr
+    from homeassistant.helpers import entity_registry as er
+    from pytest_homeassistant_custom_component.common import MockConfigEntry
+
+    config_entry = MockConfigEntry(domain="test_platform")
+    config_entry.add_to_hass(hass)
+    device = dr.async_get(hass).async_get_or_create(
+        config_entry_id=config_entry.entry_id, identifiers={("test_platform", "plug")}
+    )
+    reg = er.async_get(hass)
+    entry = reg.async_get_or_create("light", "test_platform", "wrapped", device_id=device.id)
+    room = ar.async_get(hass).async_create("Lounge TV")
+
+    real = reg.async_update_entity
+
+    def refuse_area(entity_id, **kwargs):
+        if "area_id" in kwargs:
+            raise ValueError("An entity without a name of its own cannot have an area of its own")
+        return real(entity_id, **kwargs)
+
+    with patch.object(reg, "async_update_entity", side_effect=refuse_area):
+        registry._set_area_for_new_light(hass, entry.entity_id, room.id)
+
+    assert dr.async_get(hass).async_get(device.id).area_id == room.id
+    # Already in the right room: nothing more to do, and no error.
+    registry._set_area_for_new_light(hass, entry.entity_id, room.id)

@@ -294,6 +294,35 @@ async def async_discard_switch_light(
         registry.async_update_entity(switch_entity_id, hidden_by=None)
 
 
+def _set_area_for_new_light(hass: HomeAssistant, entity_id: str, area_id: str) -> None:
+    """Put the new light in the old light's room, in the way Home Assistant allows.
+
+    An entity that has no name of its own (a light made from a plug takes its
+    device's name) may not have an area of its own: Home Assistant only lets
+    you set the area on its device. So: do nothing if it is already in that
+    room, try the entity first, and fall back to the device. A failure here
+    never undoes the replace; the light just stays in whatever room it was in.
+    """
+    registry = er.async_get(hass)
+    entry = registry.async_get(entity_id)
+    if entry is None:
+        return
+    if async_get_effective_area(hass, entity_id) == area_id:
+        return
+    try:
+        registry.async_update_entity(entity_id, area_id=area_id)
+        return
+    except ValueError:
+        pass
+    if entry.device_id:
+        try:
+            dr.async_get(hass).async_update_device(entry.device_id, area_id=area_id)
+        except ValueError:
+            _LOGGER.warning("Could not move %s to its old light's room", entity_id)
+    else:
+        _LOGGER.warning("Could not move %s to its old light's room", entity_id)
+
+
 async def async_take_over_entity_id(
     hass: HomeAssistant,
     old_entity_id: str,
@@ -375,8 +404,6 @@ async def async_take_over_entity_id(
     changes: dict = {} if keep_new_id else {"new_entity_id": old_entity_id}
     if icon:
         changes["icon"] = icon
-    if area_id is not None:
-        changes["area_id"] = area_id
     known = set(_label_id_cache(hass).values())
     labels = set(new_entry.labels)
     if drop_type_labels:
@@ -392,6 +419,10 @@ async def async_take_over_entity_id(
             await async_discard_switch_light(hass, *created)
         undo_aside()
         raise
+
+    final_new_id = new_entity_id if keep_new_id else old_entity_id
+    if area_id is not None:
+        _set_area_for_new_light(hass, final_new_id, area_id)
 
     if dead:
         registry.async_remove(aside_id)
