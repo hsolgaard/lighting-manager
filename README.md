@@ -16,9 +16,12 @@ You tell it about each light one time: its **name**, its **room** and what
   room and every light. Adopt a new light, or rename a room, and every card
   updates by itself. There are no entity lists to maintain and no YAML to write.
 - **Schedules by room**, and **countdowns** ("on for 30 minutes") on any light.
-- **Replace a light** without breaking anything. A new bulb takes over the old
-  one's entity ID and settings, so every schedule, automation, scene and
-  dashboard keeps working.
+- **Replace a light** without breaking anything. The new bulb (or a smart plug)
+  takes over the old one's settings, and your Scheduler schedules move across
+  with it. Automations, scenes and dashboards keep working too, or are updated
+  for you.
+- **See every light's schedules** right under the light, with no trip to the
+  Scheduler to check them.
 
 It adds a **Lighting Manager** panel to your sidebar, where you manage all of
 this.
@@ -99,14 +102,17 @@ planned.
 
 ## The Lighting Manager panel
 
-This is where you manage your lights. It has three tabs:
+This is where you manage your lights. It has four tabs:
 
 - **Table**: every light you manage, with its room, type, whether it is on, its
   status (OK, Unavailable, Needs setup), how many schedules it has and any
   running countdown. Click a light to rename it, move it or change its
-  settings.
+  settings, and to see its schedules.
 - **Rooms**: your lights grouped by room, where you can change their order.
+  Each light's schedules are listed right under it.
 - **Inbox**: new lights waiting for you to adopt them.
+- **Replaced**: lights you have replaced, ready to review and remove (see
+  below).
 
 ## The pages
 
@@ -178,9 +184,9 @@ Zigbee, say)?
    light in Lighting Manager and click **Replace this light...**.)
 3. Choose the old light, read the preview, and confirm.
 
-The new light takes over the old light's **entity ID, name, room, icon, type
-and settings**, so every schedule, automation, scene and dashboard that used
-the old light keeps working with no edits. A dead old light is removed. An old
+The new light takes over the old light's **room, icon, type and settings**, and
+your **Scheduler schedules always come with it**. What happens to the entity ID
+and name is your choice (below). A dead old light is removed. An old
 light that still works is **disabled and renamed** (for example
 `light.kitchen_replaced`) rather than deleted, so its integration cannot
 re-create it as a new light after a restart. Delete its device later when you
@@ -243,6 +249,20 @@ you when that happens, and the device then has to be removed where it is
 managed.
 
 <img width="535" height="317" alt="image" src="https://github.com/user-attachments/assets/01907c46-4ba5-45ff-b493-73d05f41485e" />
+
+### See a light's schedules
+
+Open a light in the **Table** tab and its panel has a **Schedules** list. In the
+**Rooms** tab the same schedules sit directly under each light. Each line shows
+the days, the time (or "sunset +15 min") and what it does ("Turn on (60%)",
+"Turn off"). A disabled schedule is struck through and says so; a schedule shared
+with other lights says "also 1 other light".
+
+This is a read-only view, so you can check a schedule (after a Replace, for
+instance) without leaving Lighting Manager. To add or change a schedule, use the
+Scheduler card (the calendar button next to a room on the Lights page, or the
+**Schedules (Lighting Manager)** page). It needs the Scheduler Component; without
+it the list simply isn't shown.
 
 ### Change the order of lights on a dashboard
 
@@ -342,6 +362,18 @@ check your own profile has not hidden them.
 **Schedules are empty or the Schedules row is blank.** Install the Scheduler
 Component and the Scheduler Card from HACS (see Requirements) and restart.
 
+**A schedule was left for me to fix after a Replace.** Lighting Manager only
+moves a schedule when it can confirm what it holds. If the Scheduler had saved a
+change only seconds earlier, or Scheduler refused the edit, the schedule is
+left untouched and named in the summary. Open it in the Scheduler and choose the
+new light; nothing is deleted. A copy of every schedule it changed is in
+`lighting_manager_backups/` in your config folder.
+
+**Replace says the plug is "already wrapped".** A smart plug can only have one
+"Switch as X" helper. Open Settings, Devices & services, Helpers (or go to
+`/config/integrations/integration/switch_as_x`) and delete the old helper for
+that plug, or use the light it made. The message names the light.
+
 **A light is not in the Inbox.** It may already be adopted or ignored. Turn on
 **Show ignored** in the toolbar to see ignored lights.
 
@@ -370,7 +402,9 @@ If you added the dashboard resource, remove that too.
 - A light's **type** is stored as a Home Assistant Label named like
   "Lighting: Ceiling".
 - Schedules are provided by the Scheduler Component. Lighting Manager does not
-  run its own scheduler.
+  run its own scheduler. It reads the Scheduler's saved data to show schedules
+  and to move them when a light is replaced, and it changes them only through
+  the Scheduler's own edit service.
 
 ## Contributing and development
 

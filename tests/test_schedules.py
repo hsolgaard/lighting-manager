@@ -266,3 +266,59 @@ async def test_no_scheduler_storage_is_not_an_error(hass, coordinator):  # noqa:
     result = await coordinator.async_replace_light(old, new, use_new_id=True)
 
     assert result["schedules"]["schedules"] == []
+
+
+async def test_list_by_light_groups_schedules_under_each_light(hass, coordinator):  # noqa: F811
+    cond = [{"entity_id": "light.lamp", "attribute": "state", "match_type": "is", "value": "on"}]
+    two = _slot("18:00:00", "light.lamp")
+    two["actions"][0]["service_data"] = {"brightness_pct": 60}
+    two["actions"].append({"service": "light.turn_on", "entity_id": "light.other", "service_data": {}})
+    _install(
+        hass,
+        [
+            _schedule("aaa111", [two, _slot("23:15:00", "light.lamp", service="light.turn_off")]),
+            _schedule("bbb222", [_slot("sunset+00:15:00", "light.lamp", conditions=cond)], enabled=False, weekdays=("sat", "sun")),
+            _schedule("ccc333", [_slot("07:00:00", "input_boolean.guest", service="input_boolean.turn_on")]),
+        ],
+    )
+
+    result = await coordinator.async_list_schedules()
+
+    assert set(result) == {"light.lamp", "light.other"}  # input_boolean is not a light
+    lamp = {r["schedule"]: r for r in result["light.lamp"]}
+    first = lamp["switch.schedule_aaa111"]
+    assert first["enabled"] is True and first["approximate"] is False
+    assert [s["start"] for s in first["slots"]] == ["18:00:00", "23:15:00"]
+    # Only the actions that act on THIS light are listed for it.
+    assert first["slots"][0]["actions"] == [{"service": "light.turn_on", "service_data": {"brightness_pct": 60}}]
+    assert first["shared_with"] == ["light.other"]
+    second = lamp["switch.schedule_bbb222"]
+    assert second["enabled"] is False and second["slots"][0]["has_conditions"] is True
+    assert [r["schedule"] for r in result["light.other"]] == ["switch.schedule_aaa111"]
+
+
+async def test_list_falls_back_to_live_attributes_when_file_is_out_of_date(hass, coordinator):  # noqa: F811
+    _install(
+        hass,
+        [_schedule("aaa111", [_slot("10:11:00", "light.lamp")])],
+        live_override={"aaa111": {"entities": ["light.lamp", "light.new_one"], "timeslots": ["10:11:00"]}},
+    )
+
+    result = await coordinator.async_list_schedules()
+
+    row = result["light.lamp"][0]
+    assert row["approximate"] is True
+    assert row["slots"][0]["start"] == "10:11:00"
+    assert "light.new_one" in result
+
+
+async def test_list_works_without_the_storage_file(hass, coordinator):  # noqa: F811
+    hass.states.async_set(
+        "switch.schedule_abc123",
+        "on",
+        {"entities": ["light.lamp"], "weekdays": ["mon"], "timeslots": ["08:00:00"], "actions": [{"service": "light.turn_on"}]},
+    )
+
+    result = await coordinator.async_list_schedules()
+
+    assert result["light.lamp"][0]["approximate"] is True

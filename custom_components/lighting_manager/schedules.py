@@ -149,6 +149,91 @@ def _build_timeslots(schedule: dict[str, Any], old: str, new: str) -> list[dict[
     return slots
 
 
+# -- read-only listing for the panel ---------------------------------------------
+
+
+def _entity_actions(slot: dict[str, Any], entity_id: str) -> list[dict[str, Any]]:
+    """The actions of one time slot that act on entity_id."""
+    out = []
+    for action in slot.get("actions") or []:
+        ids = _ids(action.get("entity_id"))
+        if not ids or entity_id in ids:
+            out.append({"service": action.get("service", ""), "service_data": action.get("service_data") or {}})
+    return out
+
+
+def _rows_from_stored(schedule: dict[str, Any], switch_id: str, state) -> dict[str, dict[str, Any]]:
+    """One row per light this schedule acts on, from the full saved data."""
+    targets = {e for e in _action_entities(schedule) if e.split(".")[0] in ("light", "switch")}
+    rows = {}
+    for entity_id in targets:
+        slots = []
+        for slot in schedule.get("timeslots") or []:
+            actions = _entity_actions(slot, entity_id)
+            if not actions:
+                continue
+            slots.append(
+                {
+                    "start": slot.get("start"),
+                    "stop": slot.get("stop"),
+                    "actions": actions,
+                    "has_conditions": bool(slot.get("conditions")),
+                }
+            )
+        rows[entity_id] = {
+            "schedule": switch_id,
+            "name": schedule.get("name"),
+            "enabled": state.state == "on",
+            "weekdays": schedule.get("weekdays") or [],
+            "repeat_type": schedule.get("repeat_type"),
+            "slots": slots,
+            "shared_with": sorted(targets - {entity_id}),
+            "approximate": False,
+        }
+    return rows
+
+
+def _rows_from_live(state) -> dict[str, dict[str, Any]]:
+    """Best effort from the live entity alone (used when the saved file isn't trustworthy yet)."""
+    attrs = state.attributes
+    targets = {e for e in (attrs.get("entities") or []) if isinstance(e, str) and e.split(".")[0] in ("light", "switch")}
+    services = [a.get("service", "") for a in (attrs.get("actions") or []) if isinstance(a, dict)]
+    rows = {}
+    for entity_id in targets:
+        rows[entity_id] = {
+            "schedule": state.entity_id,
+            "name": None,
+            "enabled": state.state == "on",
+            "weekdays": list(attrs.get("weekdays") or []),
+            "repeat_type": None,
+            "slots": [
+                {"start": start, "stop": None, "actions": [{"service": sv, "service_data": {}} for sv in services], "has_conditions": False}
+                for start in (attrs.get("timeslots") or [])
+            ],
+            "shared_with": sorted(targets - {entity_id}),
+            "approximate": True,
+        }
+    return rows
+
+
+async def async_list_by_light(hass: HomeAssistant) -> dict[str, list[dict[str, Any]]]:
+    """Every Scheduler schedule, grouped under the lights it acts on. Read-only."""
+    stored = await hass.async_add_executor_job(_read_storage, hass.config.path(STORAGE_PATH))
+    by_id = {s.get("schedule_id"): s for s in stored or []}
+    result: dict[str, list[dict[str, Any]]] = {}
+    for state in hass.states.async_all("switch"):
+        if not state.entity_id.startswith(SWITCH_PREFIX):
+            continue
+        schedule = by_id.get(state.entity_id[len(SWITCH_PREFIX):])
+        if schedule is not None and _disagreement(schedule, state) is None:
+            rows = _rows_from_stored(schedule, state.entity_id, state)
+        else:
+            rows = _rows_from_live(state)
+        for entity_id, row in rows.items():
+            result.setdefault(entity_id, []).append(row)
+    return result
+
+
 # -- public entry points ----------------------------------------------------------
 
 

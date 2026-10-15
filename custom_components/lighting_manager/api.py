@@ -47,6 +47,7 @@ def async_register_websocket_commands(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_set_scheduling_included)
     websocket_api.async_register_command(hass, ws_promote_switch)
     websocket_api.async_register_command(hass, ws_replace_light)
+    websocket_api.async_register_command(hass, ws_list_schedules)
     websocket_api.async_register_command(hass, ws_find_references)
     websocket_api.async_register_command(hass, ws_change_entity_id)
     websocket_api.async_register_command(hass, ws_list_replaced)
@@ -240,6 +241,13 @@ async def ws_replace_light(hass: HomeAssistant, connection, msg) -> None:
         connection.send_error(msg["id"], "invalid_format", str(err))
         return
     connection.send_result(msg["id"], result)
+
+
+@websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/list_schedules"})
+@websocket_api.async_response
+async def ws_list_schedules(hass: HomeAssistant, connection, msg) -> None:
+    """Read-only: each light's Scheduler schedules (days, times, actions)."""
+    connection.send_result(msg["id"], {"schedules": await _coordinator(hass).async_list_schedules()})
 
 
 @websocket_api.require_admin

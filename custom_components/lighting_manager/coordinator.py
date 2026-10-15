@@ -609,6 +609,10 @@ class LightingManagerCoordinator:
 
     # -- schedules --------------------------------------------------------------
 
+    async def async_list_schedules(self) -> dict[str, list[dict]]:
+        """All Scheduler schedules grouped under the lights they act on (read-only)."""
+        return await schedules.async_list_by_light(self.hass)
+
     async def _async_snapshot_schedules(self, entity_id: str) -> list[dict]:
         try:
             return await schedules.async_snapshot(self.hass, self, entity_id)

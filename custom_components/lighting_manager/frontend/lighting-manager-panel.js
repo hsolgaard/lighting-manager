@@ -400,6 +400,14 @@ const CSS_TEXT = `
   .lm-room-name { flex: 1; min-width: 0; font-weight: 500; word-break: break-word; }
   .lm-room-meta { display: flex; flex-wrap: wrap; gap: 4px; justify-content: flex-end; }
   .lm-hint-link { display: inline-block; margin-top: 4px; font-size: 0.85em; }
+  .lm-room-row { flex-wrap: wrap; }
+  .lm-sched-list { flex-basis: 100%; padding: 0 0 4px 30px; order: 10; }
+  .lm-sched-item { font-size: 0.88em; color: var(--secondary-text-color); padding: 1px 0; display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: baseline; }
+  .lm-sched-item.off .lm-sched-text { text-decoration: line-through; opacity: 0.7; }
+  .lm-sched-days { font-weight: 500; color: var(--primary-text-color); }
+  .lm-sched-detail-list { margin-top: 6px; }
+  .lm-sched-detail-list .lm-sched-item { font-size: 0.95em; padding: 4px 0; border-bottom: 1px solid var(--divider-color); }
+  .lm-sched-detail-list .lm-sched-item:last-child { border-bottom: none; }
   @media (max-width: 600px) {
     .lm-room-row { flex-wrap: wrap; }
     .lm-room-meta { justify-content: flex-start; flex-basis: 100%; padding-left: 30px; }
@@ -416,6 +424,8 @@ class LightingManagerPanel extends HTMLElement {
     this._lights = [];
     this._inbox = [];
     this._lightsById = new Map();
+    this._schedules = {}; // entity_id -> [schedule rows], read-only, from Scheduler
+    this._scheduleRetry = null;
     this._selectedEntityId = null;
     this._sortColumn = "name";
     this._sortDirection = "asc";
@@ -486,6 +496,7 @@ class LightingManagerPanel extends HTMLElement {
       this._inbox = inboxResult.items;
       this._lightsById = new Map(this._lights.map((l) => [l.entity_id, l]));
       this._clearError();
+      await this._refreshSchedules();
       await this._refreshReplaced();
       this._renderView();
       if (this._selectedEntityId) {
@@ -575,6 +586,120 @@ class LightingManagerPanel extends HTMLElement {
   _sortedAreaEntries() {
     const areas = (this._hass.areas && Object.values(this._hass.areas)) || [];
     return areas.slice().sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  // -- schedules (read-only, from Scheduler) ---------------------------------------
+
+  async _refreshSchedules() {
+    if (!this._lights.some((l) => l.schedule_count > 0)) {
+      this._schedules = {};
+      return;
+    }
+    try {
+      const res = await this._hass.callWS({ type: "lighting_manager/list_schedules" });
+      this._schedules = res.schedules || {};
+    } catch (err) {
+      return; // keep what we had; schedules are informational
+    }
+    // Scheduler saves a few seconds after an edit; look again once if anything is still settling.
+    const settling = Object.values(this._schedules).some((rows) => rows.some((r) => r.approximate));
+    if (settling && !this._scheduleRetry) {
+      this._scheduleRetry = setTimeout(() => {
+        this._scheduleRetry = null;
+        this._refreshAll();
+      }, 12000);
+    }
+  }
+
+  _formatScheduleDays(days) {
+    const order = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
+    const names = { mon: "Mon", tue: "Tue", wed: "Wed", thu: "Thu", fri: "Fri", sat: "Sat", sun: "Sun" };
+    const list = (days || []).map((d) => String(d).toLowerCase());
+    if (!list.length || list.includes("daily")) return "Every day";
+    if (list.includes("workday")) return "Workdays";
+    if (list.includes("weekend")) return "Weekends";
+    const set = new Set(list);
+    if (order.every((d) => set.has(d))) return "Every day";
+    if (set.size === 5 && ["mon", "tue", "wed", "thu", "fri"].every((d) => set.has(d))) return "Weekdays";
+    if (set.size === 2 && set.has("sat") && set.has("sun")) return "Weekends";
+    return order.filter((d) => set.has(d)).map((d) => names[d]).join(", ");
+  }
+
+  _formatScheduleTime(value) {
+    if (!value) return "";
+    const text = String(value);
+    const sun = text.match(/^(sunrise|sunset)(?:([+-])(\d\d):(\d\d)(?::\d\d)?)?$/);
+    if (sun) {
+      if (!sun[2]) return sun[1];
+      const minutes = parseInt(sun[3], 10) * 60 + parseInt(sun[4], 10);
+      return minutes === 0 ? sun[1] : `${sun[1]} ${sun[2] === "-" ? "−" : "+"}${minutes} min`;
+    }
+    const clock = text.match(/^(\d\d):(\d\d)(?::\d\d)?$/);
+    return clock ? `${clock[1]}:${clock[2]}` : text;
+  }
+
+  _formatScheduleAction(action) {
+    const service = action.service || "";
+    const labels = {
+      "light.turn_on": "Turn on",
+      "light.turn_off": "Turn off",
+      "light.toggle": "Toggle",
+      "switch.turn_on": "Turn on",
+      "switch.turn_off": "Turn off",
+      "switch.toggle": "Toggle",
+      "scene.turn_on": "Activate scene",
+    };
+    let text = labels[service];
+    if (!text) {
+      const bare = service.split(".").pop().replace(/_/g, " ");
+      text = bare ? bare.charAt(0).toUpperCase() + bare.slice(1) : "Action";
+    }
+    const data = action.service_data || {};
+    const extras = [];
+    if (data.brightness_pct !== undefined) extras.push(`${data.brightness_pct}%`);
+    else if (data.brightness !== undefined) extras.push(`${Math.round((Number(data.brightness) / 255) * 100)}%`);
+    if (data.color_temp_kelvin !== undefined) extras.push(`${data.color_temp_kelvin} K`);
+    return extras.length ? `${text} (${extras.join(", ")})` : text;
+  }
+
+  // One line per schedule that acts on this light: days, then each time and what it does.
+  _renderScheduleList(container, entityId) {
+    const rows = this._schedules[entityId] || [];
+    for (const row of rows) {
+      const item = document.createElement("div");
+      item.className = "lm-sched-item" + (row.enabled ? "" : " off");
+      const days = document.createElement("span");
+      days.className = "lm-sched-days";
+      days.textContent = this._formatScheduleDays(row.weekdays);
+      item.appendChild(days);
+      const text = document.createElement("span");
+      text.className = "lm-sched-text";
+      text.textContent = (row.slots || [])
+        .map((slot) => {
+          const when = slot.stop
+            ? `${this._formatScheduleTime(slot.start)}–${this._formatScheduleTime(slot.stop)}`
+            : this._formatScheduleTime(slot.start);
+          const what = [...new Set((slot.actions || []).map((a) => this._formatScheduleAction(a)))].join(" + ");
+          return what ? `${when} ${what}` : when;
+        })
+        .join(", ");
+      item.appendChild(text);
+      const notes = [];
+      if (!row.enabled) notes.push("disabled");
+      if (row.repeat_type === "single") notes.push("one time");
+      if (row.shared_with && row.shared_with.length) {
+        notes.push(`also ${row.shared_with.length} other light${row.shared_with.length === 1 ? "" : "s"}`);
+      }
+      if ((row.slots || []).some((s) => s.has_conditions)) notes.push("has conditions");
+      if (row.approximate) notes.push("Scheduler is still saving a change");
+      if (notes.length) {
+        const note = document.createElement("span");
+        note.textContent = `(${notes.join(", ")})`;
+        item.appendChild(note);
+      }
+      container.appendChild(item);
+    }
+    return rows.length;
   }
 
   _formatCountdown(seconds) {
@@ -1167,6 +1292,10 @@ class LightingManagerPanel extends HTMLElement {
     if (light.status === "unavailable") addBadge("Unavailable", "warn");
     if (light.adopted && !light.ignored && !light.dashboard_included) addBadge("Off dashboard", "");
     row.appendChild(meta);
+    // The light's schedules sit right under it, so there is no need to open Scheduler to check them.
+    const schedBox = document.createElement("div");
+    schedBox.className = "lm-sched-list";
+    if (this._renderScheduleList(schedBox, light.entity_id)) row.appendChild(schedBox);
     return row;
   }
 
@@ -1763,7 +1892,24 @@ class LightingManagerPanel extends HTMLElement {
       // cheap partial step; a real deep link into the Scheduler Card is
       // still blocked on deep_link_for_schedule() returning None until
       // that card exposes a stable per-schedule URL (see README).
-      schedInfo.innerHTML = `<span class="lm-badge" title="Read-only count. To create or edit a schedule, use the Scheduler Card (Niels Faber Scheduler) — Lighting Manager doesn't duplicate its editor.">${light.schedule_count} schedule${light.schedule_count === 1 ? "" : "s"}</span>`;
+      const schedTitle = document.createElement("div");
+      schedTitle.className = "lm-section-title";
+      schedTitle.textContent = `Schedules (${light.schedule_count})`;
+      schedTitle.title =
+        "Read-only. To create or edit a schedule, use the Scheduler card (Niels Faber Scheduler); Lighting Manager doesn't duplicate its editor.";
+      schedInfo.appendChild(schedTitle);
+      const schedList = document.createElement("div");
+      schedList.className = "lm-sched-detail-list";
+      if (!this._renderScheduleList(schedList, light.entity_id)) {
+        schedList.className = "meta";
+        schedList.textContent = "Loading…";
+      }
+      schedInfo.appendChild(schedList);
+      const schedHint = document.createElement("div");
+      schedHint.className = "meta";
+      schedHint.style.cssText = "color:var(--secondary-text-color);font-size:0.85em;margin-top:4px";
+      schedHint.textContent = "Read-only. Edit schedules in the Scheduler.";
+      schedInfo.appendChild(schedHint);
       this._detailEl.appendChild(schedInfo);
     }
 
