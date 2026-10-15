@@ -438,7 +438,9 @@ class LightingManagerCoordinator:
         record.last_known_entity_id = entity_id
         await self.store.async_set_light(key, record)
 
-    async def async_replace_light(self, old_entity_id: str, new_entity_id: str) -> dict:
+    async def async_replace_light(
+        self, old_entity_id: str, new_entity_id: str, convert_switch: bool = False
+    ) -> dict:
         """Replace one light with another, carrying its configuration forward (PRD §24).
 
         The new light takes over the OLD entity ID, so schedules,
@@ -450,6 +452,13 @@ class LightingManagerCoordinator:
         aside and disabled if it still works (e.g. a Tuya WiFi bulb being
         upgraded to Zigbee) - removing a live entry would just let its
         integration re-create it as a "new" light after the next restart.
+
+        With convert_switch=True the replacement is a switch (a smart
+        plug, say) and the old one is a light: the old light is renamed
+        out of the way first, a light is created from the switch with Home
+        Assistant's "Switch as X" helper, and that new light takes over
+        the old name and ID. Without convert_switch a light and a switch
+        can never replace each other (an entity can't change type).
         """
         if old_entity_id == new_entity_id:
             raise ValueError("Choose two different lights")
@@ -460,6 +469,19 @@ class LightingManagerCoordinator:
             raise ValueError(f"{old_entity_id} has no entity registry entry")
         if new_entry is None:
             raise ValueError(f"{new_entity_id} has no entity registry entry")
+
+        old_domain = old_entity_id.split(".")[0]
+        new_domain = new_entity_id.split(".")[0]
+        converting = False
+        if old_domain != new_domain:
+            if not (convert_switch and old_domain == "light" and new_domain == "switch"):
+                raise ValueError(
+                    "A light can only be replaced by an entity of the same type (light/switch)"
+                )
+            reason = registry.async_can_convert_switch(self.hass, new_entity_id)
+            if reason:
+                raise ValueError(reason)
+            converting = True
 
         old_key = registry.stable_key_for_entity(self.hass, old_entity_id)
         new_key = registry.stable_key_for_entity(self.hass, new_entity_id)
@@ -490,10 +512,18 @@ class LightingManagerCoordinator:
             new_entity_id,
             name=old_name,
             icon=old_entry.icon,
-            area_id=old_area if old_area and old_area != new_area else None,
+            # A freshly created light has no room of its own yet, so give it the old one's.
+            area_id=old_area if old_area and (converting or old_area != new_area) else None,
             extra_labels=set(old_entry.labels),
             drop_type_labels=old_has_type,
+            convert_switch=converting,
         )
+        if converting:
+            # The new light is a different entity from the switch it wraps, and
+            # the switch (now hidden) must not stay in the Inbox as well.
+            self.store.data.lights.pop(new_key, None)
+            self._first_seen_missing.pop(new_entity_id, None)
+            new_key = registry.stable_key_for_entity(self.hass, old_entity_id)
 
         record = ManagedLightRecord(**{**old_record.__dict__})
         record.adopted = True
@@ -513,4 +543,6 @@ class LightingManagerCoordinator:
             "old_entity_id_now": result["old_entity_id_now"],
             "old_platform": old_platform,
             "old_device_id": old_device_id,
+            "converted": converting,
+            "created_from": result.get("created_from"),
         }

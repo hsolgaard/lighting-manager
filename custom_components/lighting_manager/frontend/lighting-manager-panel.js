@@ -1907,32 +1907,45 @@ class LightingManagerPanel extends HTMLElement {
   // -- Replace-light dialog (PRD §24) --------------------------------------
 
   // Home Assistant cannot change an entity's type, and the type is part of
-  // its ID (light.x vs switch.x). So a plug that is a switch cannot take
-  // over a light's ID (or the other way round). Say so up front, in plain
-  // words, and say how to get unstuck.
-  _replaceTypeMismatch(oldL, newL) {
-    const kind = (l) => (l.entity_id.split(".")[0] === "switch" ? "a switch" : "a light");
+  // its ID (light.x vs switch.x), so a switch can never simply take over a
+  // light's ID. What CAN be done is to create a light that wraps the switch
+  // (Home Assistant's own "Switch as X" helper) and let that light take over.
+  //   same  - light for light, or switch for switch: a direct replace
+  //   convert - a switch (plug) replaces a light: a light is created first
+  //   blocked - a light cannot replace a switch
+  _replacePlan(oldL, newL) {
     const oldType = l_domain(oldL);
     const newType = l_domain(newL);
-    if (oldType === newType) return "";
-    const base =
-      `“${newL.name}” is ${kind(newL)} and “${oldL.name}” is ${kind(oldL)}. ` +
-      "Home Assistant doesn't let an entity change type, so one can't take over the other's ID. ";
+    if (oldType === newType) return { kind: "same" };
     if (newType === "switch" && oldType === "light") {
-      return (
-        base +
-        "To use this plug in place of that light, first turn it into a light with Home Assistant's " +
-        "“Switch as X” helper (Settings, Devices & services, Helpers, Create helper, Switch as X, choose Light). " +
-        "The new light appears in the Inbox, and you can then replace the old light with it."
-      );
+      return {
+        kind: "convert",
+        message:
+          `“${newL.name}” is a switch (a smart plug, for instance), and “${oldL.name}” is a light. ` +
+          "Lighting Manager will create a light from the switch using Home Assistant's own " +
+          "“Switch as X” helper, and that new light takes over the old light's place. " +
+          "The switch itself is kept, but hidden behind the new light.",
+      };
     }
-    return base + "Choose two lights, or two switches.";
+    return {
+      kind: "blocked",
+      message:
+        `This can't be done. “${oldL.name}” is a switch and “${newL.name}” is a light, ` +
+        "and Home Assistant doesn't let an entity change type. " +
+        "A light can only replace another light; a switch (such as a plug) can replace a light.",
+    };
   }
 
   _friendlyReplaceError(message) {
     const m = message || "";
     if (/same type/i.test(m)) {
-      return "a light and a switch can't replace each other, because Home Assistant doesn't let an entity change type.";
+      return "a light and a switch can't replace each other directly, because Home Assistant doesn't let an entity change type.";
+    }
+    if (/already wrapped/i.test(m)) {
+      return "this switch already has a light made from it with a “Switch as X” helper. Choose that light instead; it should be waiting in the Inbox.";
+    }
+    if (/isn't available|did not create|Could not create/i.test(m)) {
+      return m;
     }
     if (/no entity registry entry/i.test(m)) {
       return "one of these lights isn't registered in Home Assistant, so it can't be renamed. Check that it is a normal entity, not a YAML-defined one.";
@@ -1969,6 +1982,14 @@ class LightingManagerPanel extends HTMLElement {
       "The new light takes over the old light's name, room, settings and entity ID, so every schedule, " +
       "automation, scene and dashboard that uses the old light keeps working with no changes.";
     box.appendChild(intro);
+
+    const rules = document.createElement("p");
+    rules.className = "meta";
+    rules.style.color = "var(--secondary-text-color)";
+    rules.textContent =
+      "A light can replace a light, and a switch can replace a switch. A switch (such as a smart plug) " +
+      "can also replace a light: a light is created from it for you. A light can't replace a switch.";
+    box.appendChild(rules);
 
     const describe = (l) => {
       const note = l.state === "unavailable" ? " — not responding" : "";
@@ -2028,10 +2049,16 @@ class LightingManagerPanel extends HTMLElement {
       async () => {
         confirmBtn.disabled = true;
         showProblem("");
-        const ok = await this._callAction("replace_light", {
+        const plan = this._replacePlan(
+          this._lightsById.get(oldSelect.value),
+          this._lightsById.get(newSelect.value)
+        );
+        const payload = {
           old_entity_id: oldSelect.value,
           new_entity_id: newSelect.value,
-        });
+        };
+        if (plan.kind === "convert") payload.convert_switch = true;
+        const ok = await this._callAction("replace_light", payload);
         if (ok) {
           overlay.remove();
           this._selectEntity(oldSelect.value);
@@ -2061,14 +2088,30 @@ class LightingManagerPanel extends HTMLElement {
       const oldL = this._lightsById.get(oldSelect.value);
       const newL = this._lightsById.get(newSelect.value);
       confirmBtn.disabled = !(oldL && newL);
+      confirmBtn.textContent = "Replace light";
       if (!oldL || !newL) return;
-      const mismatch = this._replaceTypeMismatch(oldL, newL);
-      if (mismatch) {
+      const plan = this._replacePlan(oldL, newL);
+      if (plan.kind === "blocked") {
         confirmBtn.disabled = true;
-        showProblem(mismatch);
+        showProblem(plan.message);
         return;
       }
-      addLine(`“${newL.name}” will become ${oldL.entity_id}, and keep the name “${oldL.name}”.`);
+      if (plan.kind === "convert") {
+        confirmBtn.textContent = "Create light and replace";
+        const info = document.createElement("div");
+        info.style.cssText =
+          "margin:4px 0 8px;padding:6px 10px;border-left:3px solid var(--primary-color);" +
+          "background:var(--secondary-background-color,rgba(127,127,127,.1))";
+        info.textContent = plan.message;
+        preview.appendChild(info);
+        addLine(
+          `1. The old light is renamed “${oldL.name} (replaced)”, and its ID becomes ${oldL.entity_id}_replaced.`
+        );
+        addLine(`2. A new light is created from “${newL.name}”.`);
+        addLine(`3. The new light is named “${oldL.name}” and takes the ID ${oldL.entity_id}.`);
+      } else {
+        addLine(`“${newL.name}” will become ${oldL.entity_id}, and keep the name “${oldL.name}”.`);
+      }
       addLine(`Carried over: room (${this._areaName(oldL.area_id)}), icon, type and labels, and its dashboard, scheduling, tile and slider settings.`);
       if (oldL.schedule_count > 0) {
         addLine(`${oldL.schedule_count} schedule${oldL.schedule_count === 1 ? "" : "s"} stay linked automatically.`);

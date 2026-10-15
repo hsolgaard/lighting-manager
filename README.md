@@ -186,6 +186,17 @@ light that still works is **disabled and renamed** (for example
 re-create it as a new light after a restart. Delete its device later when you
 are ready.
 
+**Replacing a light with a smart plug.** A plug is a `switch`, and Home
+Assistant never lets an entity change type, so a switch cannot take a light's
+entity ID directly. Lighting Manager gets round this for you. First use
+**Add a switch as a light** on the plug, so it shows up in the Inbox. Then
+choose the old light and the plug in the Replace dialog and click **Create
+light and replace**. The old light is renamed "Name (replaced)", a light is
+created from the plug with Home Assistant's own *Switch as X* helper, and that
+new light takes the old light's name and entity ID. The plug itself is kept but
+hidden behind the new light. The other way round (a light replacing a switch)
+can't be done, and the dialog says so.
+
 <img width="535" height="317" alt="image" src="https://github.com/user-attachments/assets/01907c46-4ba5-45ff-b493-73d05f41485e" />
 
 ### Change the order of lights on a dashboard

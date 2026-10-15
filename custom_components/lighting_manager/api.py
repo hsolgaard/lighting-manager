@@ -215,6 +215,7 @@ async def ws_set_icon(hass: HomeAssistant, connection, msg) -> None:
         vol.Required("type"): f"{DOMAIN}/replace_light",
         vol.Required("old_entity_id"): _LIGHT_OR_SWITCH,
         vol.Required("new_entity_id"): _LIGHT_OR_SWITCH,
+        vol.Optional("convert_switch", default=False): bool,
     }
 )
 @websocket_api.async_response
@@ -222,7 +223,7 @@ async def ws_replace_light(hass: HomeAssistant, connection, msg) -> None:
     """PRD §24: the new light takes over the old light's entity ID and settings."""
     try:
         result = await _coordinator(hass).async_replace_light(
-            msg["old_entity_id"], msg["new_entity_id"]
+            msg["old_entity_id"], msg["new_entity_id"], msg["convert_switch"]
         )
     except ValueError as err:
         connection.send_error(msg["id"], "invalid_format", str(err))

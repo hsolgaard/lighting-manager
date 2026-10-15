@@ -565,3 +565,122 @@ async def test_replace_rejects_bad_requests(
         await coordinator.async_replace_light(other, sw)
     # Nothing was changed by the failed attempts.
     assert er.async_get(hass).async_get(old).unique_id == "old-1"
+
+
+# -- replacing a light with a switch (a plug): the light is created for you ----
+
+
+async def _promoted_plug(hass, coordinator, entity_id="switch.plug", unique_id="plug-1"):
+    plug = _register_light(hass, entity_id, unique_id)
+    await coordinator.async_promote_switch(plug)
+    return plug
+
+
+async def test_replace_with_switch_requires_explicit_conversion(
+    hass: HomeAssistant, coordinator: LightingManagerCoordinator
+) -> None:
+    old, _ = await _adopted_old_light(hass, coordinator)
+    plug = await _promoted_plug(hass, coordinator)
+
+    with pytest.raises(ValueError, match="same type"):
+        await coordinator.async_replace_light(old, plug)
+    # Nothing was created or renamed.
+    assert hass.config_entries.async_entries("switch_as_x") == []
+    assert er.async_get(hass).async_get(old).unique_id == "old-1"
+
+
+async def test_replace_light_with_switch_creates_light_with_old_name_and_id(
+    hass: HomeAssistant, coordinator: LightingManagerCoordinator
+) -> None:
+    old, area = await _adopted_old_light(hass, coordinator, state="on")
+    plug = await _promoted_plug(hass, coordinator)
+    ent_reg = er.async_get(hass)
+
+    result = await coordinator.async_replace_light(old, plug, convert_switch=True)
+    await hass.async_block_till_done()
+
+    assert result["converted"] is True
+    assert result["created_from"] == plug
+    assert result["outcome"] == "disabled"
+    # The new light owns the old entity ID, name, icon and room...
+    new_light = ent_reg.async_get(old)
+    assert new_light.platform == "switch_as_x"
+    assert new_light.name == "Kitchen lamp"
+    assert new_light.icon == "mdi:floor-lamp"
+    assert new_light.area_id == area.id
+    assert registry.get_light_type(hass, old) == "table_lamp"
+    # ...the old light was renamed first and disabled, not deleted...
+    aside = ent_reg.async_get(result["old_entity_id_now"])
+    assert aside.unique_id == "old-1"
+    assert aside.name == "Kitchen lamp (replaced)"
+    assert aside.disabled_by == er.RegistryEntryDisabler.USER
+    # ...the plug is hidden behind the new light, and not listed twice.
+    assert ent_reg.async_get(plug).hidden_by is not None
+    record = coordinator.store.get_light(registry.stable_key_for_entity(hass, old))
+    assert record.adopted and record.tile_width == "full"
+    assert "test_platform:plug-1" not in coordinator.store.data.lights
+    assert "test_platform:old-1" not in coordinator.store.data.lights
+
+
+async def test_replace_dead_light_with_switch_removes_old_one(
+    hass: HomeAssistant, coordinator: LightingManagerCoordinator
+) -> None:
+    old, _ = await _adopted_old_light(hass, coordinator)
+    plug = await _promoted_plug(hass, coordinator)
+
+    result = await coordinator.async_replace_light(old, plug, convert_switch=True)
+
+    assert result["outcome"] == "removed"
+    assert er.async_get(hass).async_get(result["old_entity_id_now"]) is None
+    assert er.async_get(hass).async_get(old).platform == "switch_as_x"
+
+
+async def test_switch_that_is_already_wrapped_cannot_be_converted_again(
+    hass: HomeAssistant, coordinator: LightingManagerCoordinator
+) -> None:
+    old, _ = await _adopted_old_light(hass, coordinator)
+    plug = await _promoted_plug(hass, coordinator)
+    other_old = _register_light(hass, "light.hall", "old-2")
+    await coordinator.async_adopt_light(other_old, name="Hall")
+    await coordinator.async_replace_light(old, plug, convert_switch=True)
+    await hass.async_block_till_done()
+
+    with pytest.raises(ValueError, match="already wrapped"):
+        await coordinator.async_replace_light(other_old, plug, convert_switch=True)
+    assert er.async_get(hass).async_get(other_old).name is None or (
+        er.async_get(hass).async_get(other_old).name == "Hall"
+    )
+
+
+async def test_switch_cannot_replace_a_switch_via_conversion(
+    hass: HomeAssistant, coordinator: LightingManagerCoordinator
+) -> None:
+    old_plug = await _promoted_plug(hass, coordinator, "switch.old_plug", "plug-0")
+    await coordinator.async_adopt_light(old_plug, name="Old plug")
+    new_plug = await _promoted_plug(hass, coordinator)
+    # Two switches of the same type simply replace each other; no helper needed.
+    result = await coordinator.async_replace_light(old_plug, new_plug, convert_switch=True)
+    assert result["converted"] is False
+    assert hass.config_entries.async_entries("switch_as_x") == []
+
+
+async def test_failed_light_creation_leaves_old_light_untouched(
+    hass: HomeAssistant, coordinator: LightingManagerCoordinator, monkeypatch
+) -> None:
+    old, _ = await _adopted_old_light(hass, coordinator, state="on")
+    plug = await _promoted_plug(hass, coordinator)
+
+    async def _boom(*_args, **_kwargs):
+        raise ValueError("Home Assistant's \"Switch as X\" helper isn't available")
+
+    monkeypatch.setattr(registry, "async_create_light_from_switch", _boom)
+
+    with pytest.raises(ValueError, match="isn't available"):
+        await coordinator.async_replace_light(old, plug, convert_switch=True)
+
+    entry = er.async_get(hass).async_get(old)
+    assert entry is not None and entry.unique_id == "old-1"
+    assert entry.name == "Kitchen lamp"
+    assert er.async_get(hass).async_get(f"{old}_replaced") is None
+    assert coordinator.store.get_light("test_platform:old-1").adopted
+    assert coordinator.store.get_light("test_platform:plug-1").promoted_switch

@@ -197,36 +197,172 @@ async def _async_wait_state_cleared(hass: HomeAssistant, entity_id: str) -> None
         hass.states.async_remove(entity_id)
 
 
+SWITCH_AS_X_DOMAIN = "switch_as_x"
+REPLACED_SUFFIX = " (replaced)"
+
+
+def switch_as_x_wrapper_for(hass: HomeAssistant, switch_entity_id: str):
+    """The Switch-as-X helper entry already wrapping this switch, or None."""
+    entry = er.async_get(hass).async_get(switch_entity_id)
+    wanted = {switch_entity_id}
+    if entry is not None:
+        wanted.add(entry.id)
+    for config_entry in hass.config_entries.async_entries(SWITCH_AS_X_DOMAIN):
+        if config_entry.options.get("entity_id") in wanted:
+            return config_entry
+    return None
+
+
+def async_can_convert_switch(hass: HomeAssistant, switch_entity_id: str) -> str | None:
+    """None if this switch can be turned into a light, else the plain-words reason."""
+    if not switch_entity_id.startswith("switch."):
+        return "Only a switch can be turned into a light."
+    if er.async_get(hass).async_get(switch_entity_id) is None:
+        return "This switch isn't registered in Home Assistant (it may be defined in YAML), so it can't be wrapped."
+    if switch_as_x_wrapper_for(hass, switch_entity_id) is not None:
+        return (
+            "This switch is already wrapped by a Switch as X helper. "
+            "Use the light that helper created instead."
+        )
+    return None
+
+
+async def async_create_light_from_switch(
+    hass: HomeAssistant, switch_entity_id: str, name: str | None
+):
+    """Wrap a switch in a light with Home Assistant's own "Switch as X" helper.
+
+    Returns (light_entity_id, helper_config_entry). The switch is hidden
+    (the helper does this itself) so only the light shows up. Raises
+    ValueError, with nothing left behind, if the helper can't be created.
+    """
+    reason = async_can_convert_switch(hass, switch_entity_id)
+    if reason:
+        raise ValueError(reason)
+    registry = er.async_get(hass)
+    switch_entry = registry.async_get(switch_entity_id)
+    was_hidden = switch_entry.hidden_by
+
+    try:
+        flow = await hass.config_entries.flow.async_init(
+            SWITCH_AS_X_DOMAIN, context={"source": "user"}
+        )
+    except Exception as err:  # unknown handler: integration not available
+        raise ValueError(
+            "Home Assistant's \"Switch as X\" helper isn't available, so a light can't be created from this switch."
+        ) from err
+
+    keys = {str(k) for k in flow["data_schema"].schema}
+    user_input = {"entity_id": switch_entity_id, "target_domain": "light"}
+    if "name" in keys and name:
+        user_input["name"] = name
+    try:
+        result = await hass.config_entries.flow.async_configure(flow["flow_id"], user_input)
+    except Exception as err:
+        hass.config_entries.flow.async_abort(flow["flow_id"])
+        raise ValueError(f"Could not create a light from this switch: {err}") from err
+    if result.get("type") != "create_entry":
+        hass.config_entries.flow.async_abort(flow["flow_id"])
+        raise ValueError("Could not create a light from this switch.")
+
+    config_entry = result["result"]
+    light_id = None
+    waited = 0.0
+    while light_id is None and waited < STATE_CLEAR_TIMEOUT:
+        for entity in er.async_entries_for_config_entry(registry, config_entry.entry_id):
+            if entity.domain == "light":
+                light_id = entity.entity_id
+                break
+        if light_id is None:
+            await asyncio.sleep(0.05)
+            waited += 0.05
+    if light_id is None:
+        await async_discard_switch_light(hass, config_entry, switch_entity_id, was_hidden)
+        raise ValueError("Home Assistant did not create a light from this switch.")
+    return light_id, config_entry
+
+
+async def async_discard_switch_light(
+    hass: HomeAssistant, config_entry, switch_entity_id: str, hidden_before
+) -> None:
+    """Undo async_create_light_from_switch: drop the helper and un-hide the switch."""
+    await hass.config_entries.async_remove(config_entry.entry_id)
+    registry = er.async_get(hass)
+    entry = registry.async_get(switch_entity_id)
+    if entry is not None and hidden_before is None and entry.hidden_by is not None:
+        registry.async_update_entity(switch_entity_id, hidden_by=None)
+
+
 async def async_take_over_entity_id(
     hass: HomeAssistant,
     old_entity_id: str,
-    new_entity_id: str,
+    new_entity_id: str | None,
     *,
     name: str | None,
     icon: str | None,
     area_id: str | None,
     extra_labels: set[str],
     drop_type_labels: bool,
+    convert_switch: bool = False,
 ) -> dict:
     """Move new_entity_id onto old_entity_id's ID and retire the old entry.
 
-    Returns {"old_entity_id_now": <aside id>, "outcome": "removed"|"disabled"}.
-    Raises ValueError (after undoing the first step) if Home Assistant
-    refuses the rename.
+    With convert_switch=True, new_entity_id is a switch: after the old
+    light has been renamed out of the way, a light is created from that
+    switch (Home Assistant's "Switch as X" helper) and the new light is
+    the one that takes over.
+
+    The old entry is first renamed to "<name> (replaced)" and its ID to
+    <id>_replaced, so the newcomer can take both the name and the ID.
+
+    Returns {"old_entity_id_now", "outcome": "removed"|"disabled",
+    "created_from": <switch id or None>}. Raises ValueError (after
+    undoing everything done so far) if Home Assistant refuses a step.
     """
     registry = er.async_get(hass)
     old_entry = registry.async_get(old_entity_id)
-    new_entry = registry.async_get(new_entity_id)
+    new_entry = registry.async_get(new_entity_id) if new_entity_id else None
     if old_entry is None or new_entry is None:
         raise ValueError("Both lights must have an entity registry entry")
-    if old_entity_id.split(".")[0] != new_entity_id.split(".")[0]:
+    if convert_switch:
+        if old_entity_id.split(".")[0] != "light" or new_entity_id.split(".")[0] != "switch":
+            raise ValueError("A light can only be replaced by an entity of the same type (light/switch)")
+        reason = async_can_convert_switch(hass, new_entity_id)
+        if reason:
+            raise ValueError(reason)
+    elif old_entity_id.split(".")[0] != new_entity_id.split(".")[0]:
         raise ValueError("A light can only be replaced by an entity of the same type (light/switch)")
 
     dead = async_is_dead(hass, old_entity_id)
     aside_id = _free_aside_id(hass, old_entity_id)
 
-    registry.async_update_entity(old_entity_id, new_entity_id=aside_id)
+    aside_changes: dict = {"new_entity_id": aside_id}
+    if name:
+        aside_changes["name"] = f"{name}{REPLACED_SUFFIX}"
+    registry.async_update_entity(old_entity_id, **aside_changes)
     await _async_wait_state_cleared(hass, old_entity_id)
+
+    def undo_aside() -> None:
+        restore: dict = {"new_entity_id": old_entity_id}
+        if name:
+            restore["name"] = old_entry.name
+        registry.async_update_entity(aside_id, **restore)
+
+    created = None  # (config_entry, switch_id, hidden_before)
+    created_from = None
+    if convert_switch:
+        switch_id = new_entity_id
+        hidden_before = new_entry.hidden_by
+        try:
+            new_entity_id, config_entry = await async_create_light_from_switch(
+                hass, switch_id, name
+            )
+        except Exception:
+            undo_aside()
+            raise
+        created = (config_entry, switch_id, hidden_before)
+        created_from = switch_id
+        new_entry = registry.async_get(new_entity_id)
 
     changes: dict = {"new_entity_id": old_entity_id}
     if name:
@@ -245,7 +381,9 @@ async def async_take_over_entity_id(
     try:
         registry.async_update_entity(new_entity_id, **changes)
     except ValueError:
-        registry.async_update_entity(aside_id, new_entity_id=old_entity_id)
+        if created is not None:
+            await async_discard_switch_light(hass, *created)
+        undo_aside()
         raise
 
     if dead:
@@ -254,7 +392,11 @@ async def async_take_over_entity_id(
     else:
         registry.async_update_entity(aside_id, disabled_by=er.RegistryEntryDisabler.USER)
         outcome = "disabled"
-    return {"old_entity_id_now": aside_id, "outcome": outcome}
+    return {
+        "old_entity_id_now": aside_id,
+        "outcome": outcome,
+        "created_from": created_from,
+    }
 
 
 # --- Light-type taxonomy via HA Labels (PRD §15) ----------------------------

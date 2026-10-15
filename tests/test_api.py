@@ -600,3 +600,43 @@ async def test_replace_light_success_and_non_admin(
     denied = await ro_client.receive_json()
     assert denied["success"] is False
     assert denied["error"]["code"] == "unauthorized"
+
+
+async def test_replace_light_with_switch_over_websocket(
+    api_hass: HomeAssistant, hass_ws_client
+) -> None:
+    ent_reg = er.async_get(api_hass)
+    old = ent_reg.async_get_or_create("light", "test_platform", "old-1").entity_id
+    plug = ent_reg.async_get_or_create("switch", "test_platform", "plug-1").entity_id
+    api_hass.states.async_set(old, "unavailable")
+    api_hass.states.async_set(plug, "off")
+    from custom_components.lighting_manager import registry
+
+    registry.STATE_CLEAR_TIMEOUT = 0.2
+    coordinator = api_hass.data[DOMAIN]["coordinator"]
+    await coordinator.async_adopt_light(old, name="Lamp")
+    client = await hass_ws_client(api_hass)
+
+    # Without the explicit flag, a light and a switch never replace each other.
+    await client.send_json_auto_id(
+        {"type": f"{DOMAIN}/replace_light", "old_entity_id": old, "new_entity_id": plug}
+    )
+    refused = await client.receive_json()
+    assert refused["success"] is False
+    assert "same type" in refused["error"]["message"]
+
+    await client.send_json_auto_id(
+        {
+            "type": f"{DOMAIN}/replace_light",
+            "old_entity_id": old,
+            "new_entity_id": plug,
+            "convert_switch": True,
+        }
+    )
+    response = await client.receive_json()
+
+    assert response["success"] is True
+    assert response["result"]["converted"] is True
+    assert response["result"]["created_from"] == plug
+    assert ent_reg.async_get(old).platform == "switch_as_x"
+    assert ent_reg.async_get(old).name == "Lamp"
