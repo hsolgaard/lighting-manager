@@ -21,7 +21,7 @@ from homeassistant.helpers.event import (
 from homeassistant.helpers.start import async_at_started
 from homeassistant.util import dt as dt_util
 
-from . import references, registry
+from . import references, schedules, registry
 from .const import (
     INBOX_AREA_MISMATCH,
     INBOX_MISSING,
@@ -521,6 +521,9 @@ class LightingManagerCoordinator:
         await self.countdown.async_cancel(old_entity_id)
         await self.countdown.async_cancel(new_entity_id)
 
+        # Capture the old light's schedules while they still point at it.
+        schedule_snapshot = await self._async_snapshot_schedules(old_entity_id)
+
         result = await registry.async_take_over_entity_id(
             self.hass,
             old_entity_id,
@@ -580,6 +583,10 @@ class LightingManagerCoordinator:
                 self.hass, old_entity_id, final_id
             )
 
+        schedules_report = await self._async_restore_schedules(
+            schedule_snapshot, old_entity_id, final_id
+        )
+
         return {
             "entity_id": final_id,
             "kept_old_id": final_id == old_entity_id,
@@ -591,13 +598,40 @@ class LightingManagerCoordinator:
             "converted": converting,
             "created_from": result.get("created_from"),
             "references": references_report,
+            "schedules": schedules_report,
         }
+
+    # -- schedules --------------------------------------------------------------
+
+    async def _async_snapshot_schedules(self, entity_id: str) -> list[dict]:
+        try:
+            return await schedules.async_snapshot(self.hass, self, entity_id)
+        except Exception:  # noqa: BLE001 - never let this block the replace itself
+            _LOGGER.exception("Could not read Scheduler schedules for %s", entity_id)
+            return []
+
+    async def _async_restore_schedules(self, snapshot: list[dict], old_id: str, final_id: str) -> dict:
+        empty = {"schedules": [], "moved": 0, "unchanged": 0, "manual": [], "backup_dir": None}
+        if not snapshot:
+            return empty
+        try:
+            return await schedules.async_restore(self.hass, snapshot, old_id, final_id)
+        except Exception as err:  # noqa: BLE001
+            _LOGGER.exception("Could not re-point Scheduler schedules from %s to %s", old_id, final_id)
+            return {
+                **empty,
+                "manual": [
+                    {"schedule": s["switch_id"], "name": s["name"], "status": "failed", "detail": str(err)}
+                    for s in snapshot
+                ],
+            }
 
     # -- entity ID changes ---------------------------------------------------
 
     async def async_find_references(self, entity_id: str) -> list[dict]:
         """Everything outside Lighting Manager that mentions this entity ID."""
-        return await references.async_find_references(self.hass, self, entity_id)
+        rows = await references.async_find_references(self.hass, self, entity_id)
+        return await schedules.async_scan_rows(self.hass, self, entity_id) + rows
 
     async def async_change_entity_id(
         self, entity_id: str, new_entity_id: str, update_references: bool
@@ -605,6 +639,7 @@ class LightingManagerCoordinator:
         """Rename a light's entity ID, optionally re-pointing what referred to it."""
         registry.async_validate_new_entity_id(self.hass, entity_id, new_entity_id)
         await self.countdown.async_cancel(entity_id)
+        schedule_snapshot = await self._async_snapshot_schedules(entity_id)
         ent_reg = er.async_get(self.hass)
         try:
             ent_reg.async_update_entity(entity_id, new_entity_id=new_entity_id)
@@ -615,7 +650,13 @@ class LightingManagerCoordinator:
         report = None
         if update_references:
             report = await references.async_rewrite_references(self.hass, entity_id, new_entity_id)
-        return {"entity_id": new_entity_id, "previous_entity_id": entity_id, "references": report}
+        schedules_report = await self._async_restore_schedules(schedule_snapshot, entity_id, new_entity_id)
+        return {
+            "entity_id": new_entity_id,
+            "previous_entity_id": entity_id,
+            "references": report,
+            "schedules": schedules_report,
+        }
 
     # -- replaced lights (Replaced tab) --------------------------------------
 

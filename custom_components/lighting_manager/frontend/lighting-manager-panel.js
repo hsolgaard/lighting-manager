@@ -2041,12 +2041,15 @@ class LightingManagerPanel extends HTMLElement {
       const status = document.createElement("div");
       status.className = "meta";
       status.style.cssText = "color:var(--secondary-text-color);font-size:0.85em";
-      status.textContent = r.auto
-        ? "Can be updated for you."
-        : r.note || "Has to be changed by hand.";
+      status.textContent = r.always
+        ? r.note
+        : r.auto
+          ? "Can be updated for you."
+          : r.note || "Has to be changed by hand.";
       line.appendChild(status);
       container.appendChild(line);
-      if (r.auto) auto += 1;
+      // "always" rows (Scheduler schedules) are moved whatever the checkbox says.
+      if (r.auto && !r.always) auto += 1;
     }
     return auto;
   }
@@ -2068,6 +2071,30 @@ class LightingManagerPanel extends HTMLElement {
     row.style.marginTop = "16px";
     row.appendChild(this._makeButton("OK", onDone, { primary: true }));
     box.appendChild(row);
+  }
+
+  // What happened to the Scheduler schedules that used the old light.
+  _scheduleReportLines(report) {
+    const lines = [];
+    if (!report) return lines;
+    if (report.moved) {
+      lines.push(
+        `${report.moved} Scheduler schedule${report.moved === 1 ? " was" : "s were"} moved to the new light. ` +
+          "Days, times and on/off state are unchanged."
+      );
+    }
+    if (report.unchanged) {
+      lines.push(
+        `${report.unchanged} Scheduler schedule${report.unchanged === 1 ? " was" : "s were"} already pointing at the right light.`
+      );
+    }
+    for (const m of report.manual || []) {
+      lines.push(`Still to do by hand: schedule “${m.name}”. ${m.detail || ""}`.trim());
+    }
+    if (report.backup_dir) {
+      lines.push(`The schedules were copied to ${report.backup_dir} before they were changed.`);
+    }
+    return lines;
   }
 
   _referenceReportLines(report, remainingByHand) {
@@ -2258,8 +2285,9 @@ class LightingManagerPanel extends HTMLElement {
         } else if (result.old_device_id) {
           lines.push("The old light was removed. Its device may still be there: see the Replaced tab.");
         }
+        lines.push(...this._scheduleReportLines(result.schedules));
         if (!result.kept_old_id) {
-          const rest = refRows.filter((r) => !r.auto || !payload.update_references);
+          const rest = refRows.filter((r) => !r.always && (!r.auto || !payload.update_references));
           lines.push(...this._referenceReportLines(result.references, rest));
         }
         this._showDialogSummary(box, "Light replaced", lines, done);
@@ -2355,10 +2383,12 @@ class LightingManagerPanel extends HTMLElement {
       }
       addLine(`Carried over: room (${this._areaName(oldL.area_id)}), icon, type and labels, and its dashboard, scheduling, tile and slider settings.`);
       if (oldL.schedule_count > 0) {
+        const n = oldL.schedule_count;
         addLine(
           useNewId()
-            ? `${oldL.schedule_count} Scheduler schedule${oldL.schedule_count === 1 ? "" : "s"} use the old light. They can't be moved automatically: you'll pick the new light in the Scheduler card.`
-            : `${oldL.schedule_count} schedule${oldL.schedule_count === 1 ? "" : "s"} stay linked automatically.`
+            ? `${n} Scheduler schedule${n === 1 ? " uses" : "s use"} the old light. ` +
+                `${n === 1 ? "It is" : "They are"} moved to the new light automatically and keep their days, times and on/off state.`
+            : `${n} Scheduler schedule${n === 1 ? "" : "s"} stay linked. Lighting Manager checks ${n === 1 ? "it" : "them"} afterwards.`
         );
       }
       if (oldL.countdown_remaining_seconds !== null && oldL.countdown_remaining_seconds !== undefined) {
@@ -2460,8 +2490,12 @@ class LightingManagerPanel extends HTMLElement {
           return;
         }
         const result = this._lastActionResult || {};
-        const rest = refRows.filter((r) => !r.auto || !doUpdate);
-        const lines = [`The entity ID is now ${result.entity_id}.`, ...this._referenceReportLines(result.references, rest)];
+        const rest = refRows.filter((r) => !r.always && (!r.auto || !doUpdate));
+        const lines = [
+          `The entity ID is now ${result.entity_id}.`,
+          ...this._scheduleReportLines(result.schedules),
+          ...this._referenceReportLines(result.references, rest),
+        ];
         this._showDialogSummary(box, "Entity ID changed", lines, () => {
           overlay.remove();
           this._selectEntity(result.entity_id);

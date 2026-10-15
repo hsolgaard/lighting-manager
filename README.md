@@ -197,8 +197,20 @@ are ready.
   rewrites your YAML files (including the automations, scripts and scenes you
   made in the UI) and your UI dashboards, reloads automations, scripts and
   scenes, and copies every file it changed to `lighting_manager_backups/`
-  first. Scheduler schedules and helpers that store a plain entity ID are
-  listed but can't be changed for you; you re-point those by hand.
+  first. Helpers that store a plain entity ID are listed but can't be changed
+  for you; you re-point those by hand.
+
+**Your Scheduler schedules always come along**, whichever ID you choose. The
+Scheduler Component doesn't follow entity ID changes, so Lighting Manager
+re-points each schedule that uses the old light to the new one, keeping its days,
+times, conditions and on/off state. It copies the schedules to
+`lighting_manager_backups/` first, uses the Scheduler's own `scheduler.edit`
+service to make the change, then checks that the Scheduler shows it. When you
+keep the old ID it still checks, in case a Scheduler version followed the
+old light to its "_replaced" ID. If a schedule can't be verified (for example it
+was edited a few seconds earlier and the Scheduler hasn't saved it yet) it is
+left untouched and listed for you to re-point by hand. Schedules are never
+deleted.
 
 You can do the same on any light later with **Change entity ID...** in its
 panel.

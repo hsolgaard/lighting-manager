@@ -13,8 +13,8 @@ simply stop working. This module looks in the places it can safely reach:
 - Dashboards you edit in the UI (storage mode), through Home Assistant's
   own dashboard object, not by editing its files behind its back.
 
-It also LISTS, but never changes, things it can find yet cannot safely
-rewrite: Scheduler schedules, and UI helpers that store a plain entity ID.
+It also LISTS, but never changes, UI helpers that store a plain entity ID.
+(Scheduler schedules are handled separately, by schedules.py.)
 UI helpers that were linked through the entity picker follow a rename by
 themselves and need nothing.
 """
@@ -239,29 +239,6 @@ def _scan_helpers(hass: HomeAssistant, entity_id: str) -> list[dict[str, Any]]:
     return rows
 
 
-def _scan_schedules(coordinator, entity_id: str) -> list[dict[str, Any]]:
-    scheduler = getattr(coordinator, "scheduler", None)
-    if scheduler is None:
-        return []
-    rows = []
-    for schedule in scheduler.async_schedules_for_entity(entity_id):
-        state = coordinator.hass.states.get(schedule.schedule_id)
-        name = (state.name if state else None) or schedule.schedule_id
-        rows.append(
-            {
-                "kind": "schedule",
-                "label": f"Scheduler schedule: {name}",
-                "count": 1,
-                "auto": False,
-                "note": (
-                    "Scheduler schedules can't be re-pointed automatically. Open this schedule in the "
-                    "Scheduler card and choose the new light."
-                ),
-            }
-        )
-    return rows
-
-
 # -- Public entry points ------------------------------------------------------
 
 
@@ -270,7 +247,6 @@ async def async_find_references(hass: HomeAssistant, coordinator, entity_id: str
     rows: list[dict[str, Any]] = []
     rows += await hass.async_add_executor_job(_scan_yaml, hass.config.config_dir, entity_id)
     rows += await _scan_dashboards(hass, entity_id)
-    rows += _scan_schedules(coordinator, entity_id)
     rows += _scan_helpers(hass, entity_id)
     return rows
 
