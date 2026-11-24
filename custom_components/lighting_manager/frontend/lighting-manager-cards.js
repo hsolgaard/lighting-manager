@@ -3453,9 +3453,12 @@ class LightingManagerOverviewCard extends HTMLElement {
 
   // ---- drawing -----------------------------------------------------------
 
-  _makeTile(entityId, slider, showRoom = false) {
+  _makeTile(entityId, slider, showRoom = false, name = null) {
     const tile = document.createElement('lighting-manager-countdown-card');
     const tileConfig = { type: 'custom:lighting-manager-countdown-card', entity: entityId };
+    // 1.0.3: the light's own name, without the device name Home Assistant
+    // puts in front of it for lights that belong to a device.
+    if (name) tileConfig.name = name;
     if (slider) {
       tileConfig.features = [{ type: 'light-brightness' }];
       tileConfig.features_position = 'bottom';
@@ -3497,7 +3500,7 @@ class LightingManagerOverviewCard extends HTMLElement {
           r =>
             r.areaId + ':' + r.name + '=' +
             r.lights
-              .map(l => `${l.entity_id}:${l.width}:${l.slider ? 's' : ''}:${l.schedulable ? '' : 'x'}`)
+              .map(l => `${l.entity_id}:${l.width}:${l.slider ? 's' : ''}:${l.schedulable ? '' : 'x'}:${l.name || ''}`)
               .join(',')
         )
         .join('|');
@@ -3661,7 +3664,7 @@ class LightingManagerOverviewCard extends HTMLElement {
       const cell = document.createElement('div');
       cell.className = 'lm-ov-cell';
       if (light.width === 'full') cell.style.gridColumn = '1 / -1';
-      const tile = this._makeTile(light.entity_id, light.slider);
+      const tile = this._makeTile(light.entity_id, light.slider, false, light.name);
       this._roomTiles.push(tile);
       cell.appendChild(tile);
       grid.appendChild(cell);
@@ -3730,7 +3733,7 @@ class LightingManagerOverviewCard extends HTMLElement {
       ref.onBtn.disabled = on === ref.ids.length;
     }
 
-    const nowKey = onIds.slice().sort().join(',');
+    const nowKey = onIds.slice().sort().map(id => `${id}:${(this._lights.find(l => l.entity_id === id) || {}).name || ''}`).join(',');
     if (nowKey === this._nowKey) return;
     this._nowKey = nowKey;
 
@@ -3747,7 +3750,7 @@ class LightingManagerOverviewCard extends HTMLElement {
     for (const light of items) {
       const cell = document.createElement('div');
       cell.className = 'lm-ov-cell';
-      const tile = this._makeTile(light.entity_id, false, true);
+      const tile = this._makeTile(light.entity_id, false, true, light.name);
       this._nowTiles.push(tile);
       cell.appendChild(tile);
       this._nowGrid.appendChild(cell);
