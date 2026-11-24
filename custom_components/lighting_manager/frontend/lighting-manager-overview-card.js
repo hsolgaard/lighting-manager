@@ -132,7 +132,7 @@ class LightingManagerOverviewCard extends HTMLElement {
   }
 
   _lightName(light) {
-    return this._hass?.states?.[light.entity_id]?.attributes?.friendly_name || light.name || light.entity_id;
+    return light.name || this._hass?.states?.[light.entity_id]?.attributes?.friendly_name || light.entity_id;
   }
 
   _areaName(areaId) {

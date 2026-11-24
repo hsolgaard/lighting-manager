@@ -170,6 +170,30 @@ async def test_rename_entity_sets_registry_name(hass: HomeAssistant) -> None:
     assert updated.name == "New Name"
 
 
+async def test_display_name_is_the_lights_own_name_without_the_device_name(
+    hass: HomeAssistant, config_entry_id: str
+) -> None:
+    """1.0.3: a renamed light on a device (e.g. a plug's Switch as X light)
+    shows its own name, not Home Assistant's "<device> <name>"."""
+    device = dr.async_get(hass).async_get_or_create(
+        config_entry_id=config_entry_id, identifiers={("test", "plug")}, name="ZB-LoungeBig-plug-piano"
+    )
+    entity_registry = er.async_get(hass)
+    entry = entity_registry.async_get_or_create("light", "test_platform", "unique-dn", device_id=device.id)
+    hass.states.async_set(entry.entity_id, "on", {"friendly_name": "ZB-LoungeBig-plug-piano"})
+    assert registry.async_get_display_name(hass, entry.entity_id) == "ZB-LoungeBig-plug-piano"
+
+    await registry.async_rename_entity(hass, entry.entity_id, "Piano lamp")
+    hass.states.async_set(entry.entity_id, "on", {"friendly_name": "ZB-LoungeBig-plug-piano Piano lamp"})
+    assert registry.async_get_display_name(hass, entry.entity_id) == "Piano lamp"
+
+
+def test_display_name_without_a_registry_entry(hass: HomeAssistant) -> None:
+    hass.states.async_set("light.template_light", "off", {"friendly_name": "Template light"})
+    assert registry.async_get_display_name(hass, "light.template_light") == "Template light"
+    assert registry.async_get_display_name(hass, "light.nothing") == "light.nothing"
+
+
 async def test_ensure_type_labels_creates_full_controlled_set(
     hass: HomeAssistant,
 ) -> None:

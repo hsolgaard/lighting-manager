@@ -210,7 +210,7 @@ class LightingManagerCoordinator:
         return LightView(
             entity_id=entity_id,
             key=key,
-            name=state.name if state else entity_id,
+            name=registry.async_get_display_name(self.hass, entity_id),
             state=state.state if state else "unknown",
             area_id=area_id,
             adopted=record.adopted,

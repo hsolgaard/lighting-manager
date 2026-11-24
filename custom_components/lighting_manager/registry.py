@@ -136,6 +136,23 @@ async def async_rename_entity(
     registry.async_update_entity(entity_id, name=name)
 
 
+def async_get_display_name(hass: HomeAssistant, entity_id: str) -> str:
+    """The light's name as Lighting Manager shows it (1.0.3).
+
+    When the light has its own name in the entity registry (the Name field,
+    which is what Lighting Manager's rename sets), that name alone. Home
+    Assistant's friendly name puts the device's name in front of it for
+    lights that belong to a device ("ZB-LoungeBig-plug-piano Piano lamp"),
+    which is right for a device page but not for a list of lights. Without
+    a registry name, the friendly name (usually just the device's name).
+    """
+    entry = er.async_get(hass).async_get(entity_id)
+    if entry is not None and entry.name:
+        return entry.name
+    state = hass.states.get(entity_id)
+    return state.name if state else entity_id
+
+
 async def async_set_entity_icon(
     hass: HomeAssistant, entity_id: str, icon: str | None
 ) -> None:

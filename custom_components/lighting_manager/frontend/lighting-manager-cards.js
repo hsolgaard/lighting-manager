@@ -3005,6 +3005,9 @@ class LightingManagerRoomCard extends HTMLElement {
         .filter(l => l.dashboard_included !== false)
         .map(l => ({
           entity_id: l.entity_id,
+          // 1.0.3: the light's own name, without the device name Home
+          // Assistant puts in front of it for lights that belong to a device.
+          name: l.name,
           width: l.tile_width === 'full' ? 'full' : 'half',
           slider: l.brightness_slider === true
         }));
@@ -3054,7 +3057,7 @@ class LightingManagerRoomCard extends HTMLElement {
     const key =
       this.config.columns + '|' + (reorder ? 'R' : this._admin ? 'A' : '-') + '|' +
       (this._notice || '') + '|' +
-      this._lights.map(l => `${l.entity_id}:${l.width}:${l.slider ? 's' : ''}`).join(',');
+      this._lights.map(l => `${l.entity_id}:${l.width}:${l.slider ? 's' : ''}:${l.name || ''}`).join(',');
     if (this._renderedKey === key) return;
 
     if (reorder) {
@@ -3093,6 +3096,7 @@ class LightingManagerRoomCard extends HTMLElement {
 
       const tile = document.createElement('lighting-manager-countdown-card');
       const tileConfig = { type: 'custom:lighting-manager-countdown-card', entity: light.entity_id };
+      if (light.name) tileConfig.name = light.name;
       if (light.slider) {
         // Home Assistant's own brightness slider, under the tile. It only
         // appears for lights that can dim.
@@ -3136,7 +3140,8 @@ class LightingManagerRoomCard extends HTMLElement {
   // ---- reordering (administrators) -----------------------------------
 
   _lightName(entityId) {
-    return this._hass?.states?.[entityId]?.attributes?.friendly_name || entityId;
+    const light = (this._lights || []).find(l => l.entity_id === entityId);
+    return light?.name || this._hass?.states?.[entityId]?.attributes?.friendly_name || entityId;
   }
 
   _renderReorder() {
@@ -3392,7 +3397,7 @@ class LightingManagerOverviewCard extends HTMLElement {
   }
 
   _lightName(light) {
-    return this._hass?.states?.[light.entity_id]?.attributes?.friendly_name || light.name || light.entity_id;
+    return light.name || this._hass?.states?.[light.entity_id]?.attributes?.friendly_name || light.entity_id;
   }
 
   _areaName(areaId) {
