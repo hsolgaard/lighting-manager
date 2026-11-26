@@ -677,15 +677,21 @@ async def test_replaced_and_entity_id_commands_over_websocket(
             "old_entity_id": old,
             "new_entity_id": new,
             "use_new_id": True,
-            "update_references": True,
         }
     )
     replaced = await client.receive_json()
     assert replaced["success"] is True
     assert replaced["result"]["entity_id"] == new
     assert replaced["result"]["kept_old_id"] is False
-    assert replaced["result"]["references"]["changed"] == ["scripts.yaml"]
-    assert new in open(os.path.join(config_dir, "scripts.yaml")).read()
+    # 1.1.0: listed, never rewritten.
+    assert "references" not in replaced["result"]
+    assert new not in open(os.path.join(config_dir, "scripts.yaml")).read()
+
+    # The old rewrite option is gone from the API.
+    await client.send_json_auto_id(
+        {"type": f"{DOMAIN}/find_references", "entity_id": old, "update_references": True}
+    )
+    assert (await client.receive_json())["success"] is False
 
     await client.send_json_auto_id({"type": f"{DOMAIN}/list_replaced"})
     rows = (await client.receive_json())["result"]["replaced"]

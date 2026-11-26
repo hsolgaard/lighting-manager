@@ -444,7 +444,7 @@ class LightingManagerCoordinator:
         new_entity_id: str,
         convert_switch: bool = False,
         use_new_id: bool = False,
-        update_references: bool = False,
+        schedules_data: list[dict] | None = None,
     ) -> dict:
         """Replace one light with another, carrying its configuration forward (PRD §24).
 
@@ -467,9 +467,11 @@ class LightingManagerCoordinator:
         change type).
 
         With use_new_id=True the new light keeps its OWN entity ID instead
-        of taking the old one. Everything that referred to the old ID then
-        needs re-pointing: with update_references=True the YAML files and
-        UI dashboards that mention it are rewritten (see references.py).
+        of taking the old one. Scheduler schedules are moved to it (see
+        schedules.py; schedules_data is what the panel read from Scheduler's
+        public API). Anything else that refers to the old ID is only listed
+        (references.py), for the user to update: Lighting Manager never
+        rewrites YAML files or dashboards.
         """
         if old_entity_id == new_entity_id:
             raise ValueError("Choose two different lights")
@@ -527,7 +529,7 @@ class LightingManagerCoordinator:
         await self.countdown.async_cancel(new_entity_id)
 
         # Capture the old light's schedules while they still point at it.
-        schedule_snapshot = await self._async_snapshot_schedules(old_entity_id)
+        schedule_snapshot = await self._async_snapshot_schedules(old_entity_id, schedules_data)
 
         result = await registry.async_take_over_entity_id(
             self.hass,
@@ -583,12 +585,6 @@ class LightingManagerCoordinator:
                 ),
             )
 
-        references_report = None
-        if use_new_id and update_references and final_id != old_entity_id:
-            references_report = await references.async_rewrite_references(
-                self.hass, old_entity_id, final_id
-            )
-
         schedules_report = await self._async_restore_schedules(
             schedule_snapshot, old_entity_id, final_id
         )
@@ -603,19 +599,20 @@ class LightingManagerCoordinator:
             "old_device_id": old_device_id,
             "converted": converting,
             "created_from": result.get("created_from"),
-            "references": references_report,
             "schedules": schedules_report,
         }
 
     # -- schedules --------------------------------------------------------------
 
-    async def async_list_schedules(self) -> dict[str, list[dict]]:
+    async def async_list_schedules(self, schedules_data: list[dict] | None = None) -> dict[str, list[dict]]:
         """All Scheduler schedules grouped under the lights they act on (read-only)."""
-        return await schedules.async_list_by_light(self.hass)
+        return await schedules.async_list_by_light(self.hass, schedules.clean_schedules(schedules_data))
 
-    async def _async_snapshot_schedules(self, entity_id: str) -> list[dict]:
+    async def _async_snapshot_schedules(self, entity_id: str, schedules_data: list[dict] | None) -> list[dict]:
         try:
-            return await schedules.async_snapshot(self.hass, self, entity_id)
+            return await schedules.async_snapshot(
+                self.hass, self, entity_id, schedules.clean_schedules(schedules_data)
+            )
         except Exception:  # noqa: BLE001 - never let this block the replace itself
             _LOGGER.exception("Could not read Scheduler schedules for %s", entity_id)
             return []
@@ -638,18 +635,21 @@ class LightingManagerCoordinator:
 
     # -- entity ID changes ---------------------------------------------------
 
-    async def async_find_references(self, entity_id: str) -> list[dict]:
+    async def async_find_references(self, entity_id: str, schedules_data: list[dict] | None = None) -> list[dict]:
         """Everything outside Lighting Manager that mentions this entity ID."""
         rows = await references.async_find_references(self.hass, self, entity_id)
-        return await schedules.async_scan_rows(self.hass, self, entity_id) + rows
+        return (
+            await schedules.async_scan_rows(self.hass, self, entity_id, schedules.clean_schedules(schedules_data))
+            + rows
+        )
 
     async def async_change_entity_id(
-        self, entity_id: str, new_entity_id: str, update_references: bool
+        self, entity_id: str, new_entity_id: str, schedules_data: list[dict] | None = None
     ) -> dict:
-        """Rename a light's entity ID, optionally re-pointing what referred to it."""
+        """Rename a light's entity ID. Its Scheduler schedules follow; the rest is only listed."""
         registry.async_validate_new_entity_id(self.hass, entity_id, new_entity_id)
         await self.countdown.async_cancel(entity_id)
-        schedule_snapshot = await self._async_snapshot_schedules(entity_id)
+        schedule_snapshot = await self._async_snapshot_schedules(entity_id, schedules_data)
         ent_reg = er.async_get(self.hass)
         try:
             ent_reg.async_update_entity(entity_id, new_entity_id=new_entity_id)
@@ -657,14 +657,10 @@ class LightingManagerCoordinator:
             raise ValueError(str(err)) from err
         await self.store.async_replace_entity_id(entity_id, new_entity_id)
         self._first_seen_missing.pop(entity_id, None)
-        report = None
-        if update_references:
-            report = await references.async_rewrite_references(self.hass, entity_id, new_entity_id)
         schedules_report = await self._async_restore_schedules(schedule_snapshot, entity_id, new_entity_id)
         return {
             "entity_id": new_entity_id,
             "previous_entity_id": entity_id,
-            "references": report,
             "schedules": schedules_report,
         }
 

@@ -590,19 +590,37 @@ class LightingManagerPanel extends HTMLElement {
 
   // -- schedules (read-only, from Scheduler) ---------------------------------------
 
+  // Scheduler's schedules through its public read API: the `scheduler`
+  // websocket command, the one Scheduler's own card uses. Lighting Manager
+  // never opens Scheduler's files (1.1.0). null when Scheduler isn't there.
+  async _schedulerData() {
+    try {
+      const res = await this._hass.callWS({ type: "scheduler" });
+      return Array.isArray(res) ? res : null;
+    } catch (err) {
+      return null;
+    }
+  }
+
+  async _schedulesArg() {
+    const data = await this._schedulerData();
+    return data ? { schedules: data } : {};
+  }
+
   async _refreshSchedules() {
     if (!this._lights.some((l) => l.schedule_count > 0)) {
       this._schedules = {};
       return;
     }
+    const extra = await this._schedulesArg();
     try {
-      const res = await this._hass.callWS({ type: "lighting_manager/list_schedules" });
+      const res = await this._hass.callWS({ type: "lighting_manager/list_schedules", ...extra });
       this._schedules = res.schedules || {};
     } catch (err) {
       return; // keep what we had; schedules are informational
     }
-    // Scheduler saves a few seconds after an edit; look again once if anything is still settling.
-    const settling = Object.values(this._schedules).some((rows) => rows.some((r) => r.approximate));
+    // A schedule edited a moment ago can briefly differ from its entity; look again once.
+    const settling = extra.schedules && Object.values(this._schedules).some((rows) => rows.some((r) => r.approximate));
     if (settling && !this._scheduleRetry) {
       this._scheduleRetry = setTimeout(() => {
         this._scheduleRetry = null;
@@ -691,7 +709,7 @@ class LightingManagerPanel extends HTMLElement {
         notes.push(`also ${row.shared_with.length} other light${row.shared_with.length === 1 ? "" : "s"}`);
       }
       if ((row.slots || []).some((s) => s.has_conditions)) notes.push("has conditions");
-      if (row.approximate) notes.push("Scheduler is still saving a change");
+      if (row.approximate) notes.push("times only");
       if (notes.length) {
         const note = document.createElement("span");
         note.textContent = `(${notes.join(", ")})`;
@@ -1924,7 +1942,7 @@ class LightingManagerPanel extends HTMLElement {
       replaceHint.textContent =
         "Swapping in a new bulb, or moving to different technology (e.g. Wi-Fi to Zigbee)? " +
         "Hand this light's room and settings to the new one. You can also change this light's entity ID " +
-        "and have the automations, scripts and dashboards that use it updated.";
+        "its Scheduler schedules follow it, and everything else that uses the old ID is listed for you.";
       this._detailEl.appendChild(replaceHint);
       const replaceRow = document.createElement("div");
       replaceRow.className = "lm-field lm-field-row";
@@ -2167,17 +2185,16 @@ class LightingManagerPanel extends HTMLElement {
     return { row, input, text };
   }
 
-  // Lists what mentions an entity ID. Returns how many places can be
-  // updated automatically.
+  // Lists what mentions an entity ID. Lighting Manager never changes YAML
+  // files or dashboards: they are listed for you to update (1.1.0).
   _renderReferenceRows(container, rows) {
     container.innerHTML = "";
     if (!rows.length) {
       const none = document.createElement("div");
       none.textContent = "Nothing in your YAML files or dashboards refers to the old ID.";
       container.appendChild(none);
-      return 0;
+      return;
     }
-    let auto = 0;
     for (const r of rows) {
       const line = document.createElement("div");
       line.style.cssText = "margin:4px 0;padding:6px 8px;border:1px solid var(--divider-color);border-radius:4px";
@@ -2187,17 +2204,10 @@ class LightingManagerPanel extends HTMLElement {
       const status = document.createElement("div");
       status.className = "meta";
       status.style.cssText = "color:var(--secondary-text-color);font-size:0.85em";
-      status.textContent = r.always
-        ? r.note
-        : r.auto
-          ? "Can be updated for you."
-          : r.note || "Has to be changed by hand.";
+      status.textContent = r.note || "Change it by hand.";
       line.appendChild(status);
       container.appendChild(line);
-      // "always" rows (Scheduler schedules) are moved whatever the checkbox says.
-      if (r.auto && !r.always) auto += 1;
     }
-    return auto;
   }
 
   // Replace a dialog's content with a short "what happened" summary and an OK button.
@@ -2243,27 +2253,8 @@ class LightingManagerPanel extends HTMLElement {
     return lines;
   }
 
-  _referenceReportLines(report, remainingByHand) {
+  _referenceReportLines(remainingByHand) {
     const lines = [];
-    if (report) {
-      if (report.changed && report.changed.length) {
-        lines.push(`Updated: ${report.changed.join(", ")}.`);
-        if (report.reloaded && report.reloaded.length) {
-          lines.push(`Reloaded: ${report.reloaded.join(", ")}.`);
-        }
-        if (report.needs_reload && report.needs_reload.length) {
-          lines.push(
-            `Reload YAML configuration (or restart Home Assistant) for these to take effect: ${report.needs_reload.join(", ")}.`
-          );
-        }
-        if (report.backup_dir) {
-          lines.push(`The originals were copied to ${report.backup_dir} first.`);
-        }
-      }
-      if (report.failed && report.failed.length) {
-        lines.push(`Could not update, so change by hand: ${report.failed.join(", ")}.`);
-      }
-    }
     for (const r of remainingByHand || []) {
       lines.push(`Still to do by hand: ${r.label}. ${r.note || ""}`.trim());
     }
@@ -2354,16 +2345,6 @@ class LightingManagerPanel extends HTMLElement {
     refsBox.style.cssText = "margin:8px 0 0 24px;font-size:0.9em";
     refsBox.hidden = true;
     idChoice.appendChild(refsBox);
-    const updateRow = document.createElement("label");
-    updateRow.className = "lm-checkbox-row";
-    updateRow.style.cssText = "margin:8px 0 0 24px;font-size:0.95em;color:inherit;cursor:pointer";
-    const updateCheck = document.createElement("input");
-    updateCheck.type = "checkbox";
-    updateCheck.checked = true;
-    const updateText = document.createElement("span");
-    updateRow.append(updateCheck, updateText);
-    updateRow.hidden = true;
-    idChoice.appendChild(updateRow);
     box.appendChild(idChoice);
 
     const preview = document.createElement("div");
@@ -2403,10 +2384,10 @@ class LightingManagerPanel extends HTMLElement {
         };
         if (plan.kind === "convert") payload.convert_switch = true;
         const newId = useNewId();
-        if (newId) {
-          payload.use_new_id = true;
-          payload.update_references = updateCheck.checked && !updateRow.hidden;
-        }
+        if (newId) payload.use_new_id = true;
+        // Scheduler's schedules, read just now through its public API, so they can follow the light.
+        const schedulerData = await this._schedulerData();
+        if (schedulerData) payload.schedules = schedulerData;
         const ok = await this._callAction("replace_light", payload);
         if (!ok) {
           showProblem(
@@ -2433,8 +2414,7 @@ class LightingManagerPanel extends HTMLElement {
         }
         lines.push(...this._scheduleReportLines(result.schedules));
         if (!result.kept_old_id) {
-          const rest = refRows.filter((r) => !r.always && (!r.auto || !payload.update_references));
-          lines.push(...this._referenceReportLines(result.references, rest));
+          lines.push(...this._referenceReportLines(refRows.filter((r) => !r.always)));
         }
         this._showDialogSummary(box, "Light replaced", lines, done);
       },
@@ -2456,11 +2436,11 @@ class LightingManagerPanel extends HTMLElement {
       const token = ++refsToken;
       refsBox.hidden = false;
       refsBox.textContent = "Looking for anything that uses the old ID…";
-      updateRow.hidden = true;
       try {
         const res = await this._hass.callWS({
           type: "lighting_manager/find_references",
           entity_id: oldL.entity_id,
+          ...(await this._schedulesArg()),
         });
         if (token !== refsToken) return;
         refRows = res.references || [];
@@ -2473,11 +2453,7 @@ class LightingManagerPanel extends HTMLElement {
         return;
       }
       if (!useNewId()) return;
-      const auto = this._renderReferenceRows(refsBox, refRows);
-      updateRow.hidden = auto === 0;
-      updateText.textContent =
-        `Update the ${auto} place${auto === 1 ? "" : "s"} that can be updated for you ` +
-        "(the originals are backed up first)";
+      this._renderReferenceRows(refsBox, refRows);
     };
 
     const updatePreview = () => {
@@ -2489,7 +2465,6 @@ class LightingManagerPanel extends HTMLElement {
       confirmBtn.textContent = "Replace light";
       idChoice.hidden = true;
       refsBox.hidden = true;
-      updateRow.hidden = true;
       if (!oldL || !newL) return;
       const plan = this._replacePlan(oldL, newL);
       if (plan.kind === "blocked") {
@@ -2504,7 +2479,7 @@ class LightingManagerPanel extends HTMLElement {
         `Keep the old light's ID (${oldL.entity_id}). Everything that uses it keeps working, schedules included.`;
       newOpt.text.textContent =
         `Use the new light's own ID (${plan.kind === "convert" ? "something like " : ""}${ownId}). ` +
-        "The new light is given the old light's name, and Lighting Manager shows what uses the old ID and offers to update it.";
+        "The new light is given the old light's name. Scheduler schedules move to it; Lighting Manager lists anything else that uses the old ID, for you to update.";
       if (plan.kind === "convert") {
         confirmBtn.textContent = "Create light and replace";
         const info = document.createElement("div");
@@ -2584,7 +2559,7 @@ class LightingManagerPanel extends HTMLElement {
     hint.style.color = "var(--secondary-text-color)";
     hint.textContent =
       "Home Assistant doesn't update automations, scripts, scenes or dashboards when an entity ID changes. " +
-      "Lighting Manager looks for the old ID and can update what it safely can.";
+      "Lighting Manager moves its Scheduler schedules and lists everything else that uses the old ID, so you can update it.";
     box.appendChild(hint);
 
     const field = document.createElement("div");
@@ -2603,16 +2578,6 @@ class LightingManagerPanel extends HTMLElement {
     refsBox.style.cssText = "margin-bottom:12px;font-size:0.9em";
     refsBox.textContent = "Looking for anything that uses the current ID…";
     box.appendChild(refsBox);
-    const updateRow = document.createElement("label");
-    updateRow.className = "lm-checkbox-row";
-    updateRow.style.cssText = "margin-bottom:12px;font-size:0.95em;color:inherit;cursor:pointer";
-    const updateCheck = document.createElement("input");
-    updateCheck.type = "checkbox";
-    updateCheck.checked = true;
-    const updateText = document.createElement("span");
-    updateRow.append(updateCheck, updateText);
-    updateRow.hidden = true;
-    box.appendChild(updateRow);
 
     const problem = document.createElement("div");
     problem.className = "lm-warning";
@@ -2629,11 +2594,10 @@ class LightingManagerPanel extends HTMLElement {
         confirmBtn.disabled = true;
         problem.hidden = true;
         const newId = input.value.trim();
-        const doUpdate = updateCheck.checked && !updateRow.hidden;
         const ok = await this._callAction("change_entity_id", {
           entity_id: light.entity_id,
           new_entity_id: newId,
-          update_references: doUpdate,
+          ...(await this._schedulesArg()),
         });
         if (!ok) {
           problem.textContent = "That didn't work: " + (this._lastActionError || "unexpected error") + " Nothing has been changed.";
@@ -2642,11 +2606,10 @@ class LightingManagerPanel extends HTMLElement {
           return;
         }
         const result = this._lastActionResult || {};
-        const rest = refRows.filter((r) => !r.always && (!r.auto || !doUpdate));
         const lines = [
           `The entity ID is now ${result.entity_id}.`,
           ...this._scheduleReportLines(result.schedules),
-          ...this._referenceReportLines(result.references, rest),
+          ...this._referenceReportLines(refRows.filter((r) => !r.always)),
         ];
         this._showDialogSummary(box, "Entity ID changed", lines, () => {
           overlay.remove();
@@ -2659,15 +2622,11 @@ class LightingManagerPanel extends HTMLElement {
     buttons.appendChild(this._makeButton("Cancel", () => overlay.remove()));
     box.appendChild(buttons);
 
-    this._hass
-      .callWS({ type: "lighting_manager/find_references", entity_id: light.entity_id })
+    this._schedulesArg()
+      .then((extra) => this._hass.callWS({ type: "lighting_manager/find_references", entity_id: light.entity_id, ...extra }))
       .then((res) => {
         refRows = res.references || [];
-        const auto = this._renderReferenceRows(refsBox, refRows);
-        updateRow.hidden = auto === 0;
-        updateText.textContent =
-          `Update the ${auto} place${auto === 1 ? "" : "s"} that can be updated for you ` +
-          "(the originals are backed up first)";
+        this._renderReferenceRows(refsBox, refRows);
       })
       .catch((err) => {
         refsBox.textContent = `Could not scan: ${this._formatError(err)}`;
