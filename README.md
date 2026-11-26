@@ -201,24 +201,24 @@ are ready.
   name (and its icon, room, type and settings), so it reads the same as before
   while its ID follows your own naming standard. Home Assistant never rewrites automations,
   scripts, scenes or dashboards when an entity ID changes, so Lighting Manager
-  scans for the old ID and lists everything it finds. Tick **Update** and it
-  rewrites your YAML files (including the automations, scripts and scenes you
-  made in the UI) and your UI dashboards, reloads automations, scripts and
-  scenes, and copies every file it changed to `lighting_manager_backups/`
-  first. Helpers that store a plain entity ID are listed but can't be changed
-  for you; you re-point those by hand.
+  scans for the old ID and lists everything it finds: YAML files (including the
+  automations, scripts and scenes you made in the UI), UI dashboards and helpers
+  that store a plain entity ID. It only lists them; it never changes your files
+  or dashboards. Update each one yourself, or choose **Keep the old light's ID**
+  if you'd rather nothing needs changing.
 
 **Your Scheduler schedules always come along**, whichever ID you choose. The
 Scheduler Component doesn't follow entity ID changes, so Lighting Manager
 re-points each schedule that uses the old light to the new one, keeping its days,
-times, conditions and on/off state. It copies the schedules to
-`lighting_manager_backups/` first, uses the Scheduler's own `scheduler.edit`
-service to make the change, then checks that the Scheduler shows it. When you
-keep the old ID it still checks, in case a Scheduler version followed the
-old light to its "_replaced" ID. If a schedule can't be verified (for example it
-was edited a few seconds earlier and the Scheduler hasn't saved it yet) it is
-left untouched and listed for you to re-point by hand. Schedules are never
-deleted.
+times, conditions and on/off state. It only uses the Scheduler's public
+interfaces: the panel reads the schedules the way the Scheduler Card does, and
+the change is made with the Scheduler's own `scheduler.edit` service. It copies
+the schedules to `lighting_manager_backups/` first and checks afterwards that
+the Scheduler shows the change. When you keep the old ID it still checks, in
+case a Scheduler version followed the old light to its "_replaced" ID. If a
+schedule can't be verified (for example it doesn't match what the Scheduler
+shows right now) it is left untouched and listed for you to re-point by hand.
+Schedules are never deleted.
 
 You can do the same on any light later with **Change entity ID...** in its
 panel.
@@ -363,8 +363,8 @@ check your own profile has not hidden them.
 Component and the Scheduler Card from HACS (see Requirements) and restart.
 
 **A schedule was left for me to fix after a Replace.** Lighting Manager only
-moves a schedule when it can confirm what it holds. If the Scheduler had saved a
-change only seconds earlier, or Scheduler refused the edit, the schedule is
+moves a schedule when it can confirm what it holds. If the schedule didn't match
+what the Scheduler showed, or Scheduler refused the edit, the schedule is
 left untouched and named in the summary. Open it in the Scheduler and choose the
 new light; nothing is deleted. A copy of every schedule it changed is in
 `lighting_manager_backups/` in your config folder.

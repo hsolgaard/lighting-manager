@@ -223,7 +223,9 @@ async def ws_set_icon(hass: HomeAssistant, connection, msg) -> None:
         vol.Required("new_entity_id"): _LIGHT_OR_SWITCH,
         vol.Optional("convert_switch", default=False): bool,
         vol.Optional("use_new_id", default=False): bool,
-        vol.Optional("update_references", default=False): bool,
+        # Scheduler's schedules as the panel read them from Scheduler's
+        # public `scheduler` websocket command (see schedules.py).
+        vol.Optional("schedules"): [dict],
     }
 )
 @websocket_api.async_response
@@ -235,7 +237,7 @@ async def ws_replace_light(hass: HomeAssistant, connection, msg) -> None:
             msg["new_entity_id"],
             msg["convert_switch"],
             msg["use_new_id"],
-            msg["update_references"],
+            msg.get("schedules"),
         )
     except ValueError as err:
         connection.send_error(msg["id"], "invalid_format", str(err))
@@ -243,11 +245,20 @@ async def ws_replace_light(hass: HomeAssistant, connection, msg) -> None:
     connection.send_result(msg["id"], result)
 
 
-@websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/list_schedules"})
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): f"{DOMAIN}/list_schedules",
+        # Scheduler's schedules as the panel read them from Scheduler's
+        # public `scheduler` websocket command (see schedules.py).
+        vol.Optional("schedules"): [dict],
+    }
+)
 @websocket_api.async_response
 async def ws_list_schedules(hass: HomeAssistant, connection, msg) -> None:
     """Read-only: each light's Scheduler schedules (days, times, actions)."""
-    connection.send_result(msg["id"], {"schedules": await _coordinator(hass).async_list_schedules()})
+    connection.send_result(
+        msg["id"], {"schedules": await _coordinator(hass).async_list_schedules(msg.get("schedules"))}
+    )
 
 
 @websocket_api.require_admin
@@ -255,12 +266,15 @@ async def ws_list_schedules(hass: HomeAssistant, connection, msg) -> None:
     {
         vol.Required("type"): f"{DOMAIN}/find_references",
         vol.Required("entity_id"): _LIGHT_OR_SWITCH,
+        # Scheduler's schedules as the panel read them from Scheduler's
+        # public `scheduler` websocket command (see schedules.py).
+        vol.Optional("schedules"): [dict],
     }
 )
 @websocket_api.async_response
 async def ws_find_references(hass: HomeAssistant, connection, msg) -> None:
     """What mentions this entity ID (YAML, dashboards, schedules, helpers)?"""
-    rows = await _coordinator(hass).async_find_references(msg["entity_id"])
+    rows = await _coordinator(hass).async_find_references(msg["entity_id"], msg.get("schedules"))
     connection.send_result(msg["id"], {"references": rows})
 
 
@@ -270,14 +284,16 @@ async def ws_find_references(hass: HomeAssistant, connection, msg) -> None:
         vol.Required("type"): f"{DOMAIN}/change_entity_id",
         vol.Required("entity_id"): _LIGHT_OR_SWITCH,
         vol.Required("new_entity_id"): str,
-        vol.Optional("update_references", default=False): bool,
+        # Scheduler's schedules as the panel read them from Scheduler's
+        # public `scheduler` websocket command (see schedules.py).
+        vol.Optional("schedules"): [dict],
     }
 )
 @websocket_api.async_response
 async def ws_change_entity_id(hass: HomeAssistant, connection, msg) -> None:
     try:
         result = await _coordinator(hass).async_change_entity_id(
-            msg["entity_id"], msg["new_entity_id"], msg["update_references"]
+            msg["entity_id"], msg["new_entity_id"], msg.get("schedules")
         )
     except ValueError as err:
         connection.send_error(msg["id"], "invalid_format", str(err))

@@ -14,14 +14,6 @@ from custom_components.lighting_manager.coordinator import LightingManagerCoordi
 from .test_coordinator import _adopted_old_light, _register_light, coordinator  # noqa: F401
 
 
-@pytest.fixture(autouse=True)
-def _clean_scheduler_storage(hass: HomeAssistant):
-    path = os.path.join(hass.config.config_dir, ".storage", "scheduler.storage")
-    if os.path.exists(path):
-        os.remove(path)
-    yield
-
-
 def _slot(start, entity_id, service="light.turn_on", extra_actions=(), conditions=None):
     return {
         "start": start,
@@ -47,11 +39,7 @@ def _schedule(schedule_id, slots, *, enabled=True, weekdays=("mon", "wed", "sat"
 
 
 def _install(hass: HomeAssistant, stored: list[dict], *, live_override: dict | None = None) -> list[dict]:
-    """Write scheduler.storage and expose matching switch.schedule_* entities."""
-    folder = os.path.join(hass.config.config_dir, ".storage")
-    os.makedirs(folder, exist_ok=True)
-    with open(os.path.join(folder, "scheduler.storage"), "w") as handle:
-        json.dump({"version": 3, "key": "scheduler.storage", "data": {"schedules": stored}}, handle)
+    """Expose switch.schedule_* entities; returns the data Scheduler's read API would give the panel."""
     for sched in stored:
         entities = sorted(schedules._action_entities(sched))
         attrs = {
@@ -111,7 +99,7 @@ def _follow_renames(hass: HomeAssistant) -> None:
 async def test_replace_with_new_id_moves_schedules_and_leaves_others(hass, coordinator):  # noqa: F811
     old, _ = await _adopted_old_light(hass, coordinator, state="on")
     new = _register_light(hass, "light.zigbee_bulb_7", "new-1")
-    _install(
+    stored = _install(
         hass,
         [
             _schedule("aaa111", [_slot("10:11:00", old)], enabled=False),
@@ -120,7 +108,7 @@ async def test_replace_with_new_id_moves_schedules_and_leaves_others(hass, coord
     )
     calls = _fake_scheduler_edit(hass)
 
-    result = await coordinator.async_replace_light(old, new, use_new_id=True)
+    result = await coordinator.async_replace_light(old, new, use_new_id=True, schedules_data=stored)
 
     final = result["entity_id"]
     assert final == new
@@ -143,10 +131,10 @@ async def test_replace_with_new_id_moves_schedules_and_leaves_others(hass, coord
 async def test_keep_id_does_nothing_when_scheduler_stays_put(hass, coordinator):  # noqa: F811
     old, _ = await _adopted_old_light(hass, coordinator, state="on")
     new = _register_light(hass, "light.zigbee_bulb_7", "new-1")
-    _install(hass, [_schedule("aaa111", [_slot("10:11:00", old)])])
+    stored = _install(hass, [_schedule("aaa111", [_slot("10:11:00", old)])])
     calls = _fake_scheduler_edit(hass)
 
-    result = await coordinator.async_replace_light(old, new)
+    result = await coordinator.async_replace_light(old, new, schedules_data=stored)
 
     assert calls == []
     assert result["schedules"]["unchanged"] == 1
@@ -155,11 +143,11 @@ async def test_keep_id_does_nothing_when_scheduler_stays_put(hass, coordinator):
 async def test_keep_id_moves_schedule_back_when_scheduler_follows_the_aside_rename(hass, coordinator):  # noqa: F811
     old, _ = await _adopted_old_light(hass, coordinator, state="on")
     new = _register_light(hass, "light.zigbee_bulb_7", "new-1")
-    _install(hass, [_schedule("aaa111", [_slot("10:11:00", old)])])
+    stored = _install(hass, [_schedule("aaa111", [_slot("10:11:00", old)])])
     _follow_renames(hass)
     calls = _fake_scheduler_edit(hass)
 
-    result = await coordinator.async_replace_light(old, new)
+    result = await coordinator.async_replace_light(old, new, schedules_data=stored)
 
     assert len(calls) == 1
     assert calls[0]["timeslots"][0]["actions"][0]["entity_id"] == old
@@ -174,10 +162,10 @@ async def test_only_matching_action_and_condition_are_changed(hass, coordinator)
     cond = [{"entity_id": old, "attribute": "state", "match_type": "is", "value": "on", "value_type": "string"}]
     slot = _slot("07:00:00", old, extra_actions=[other_action], conditions=cond)
     slot["condition_type"] = "and"
-    _install(hass, [_schedule("ccc333", [slot])])
+    stored = _install(hass, [_schedule("ccc333", [slot])])
     calls = _fake_scheduler_edit(hass)
 
-    await coordinator.async_replace_light(old, new, use_new_id=True)
+    await coordinator.async_replace_light(old, new, use_new_id=True, schedules_data=stored)
 
     built = calls[0]["timeslots"][0]
     assert built["actions"][0]["entity_id"] == new
@@ -186,33 +174,33 @@ async def test_only_matching_action_and_condition_are_changed(hass, coordinator)
     assert built["condition_type"] == "and"
 
 
-async def test_schedule_the_file_disagrees_with_is_left_alone_and_reported(hass, coordinator):  # noqa: F811
+async def test_schedule_that_disagrees_with_scheduler_is_left_alone_and_reported(hass, coordinator):  # noqa: F811
     old, _ = await _adopted_old_light(hass, coordinator, state="on")
     new = _register_light(hass, "light.zigbee_bulb_7", "new-1")
     # The live entity already points somewhere else: the saved file is out of date.
-    _install(
+    stored = _install(
         hass,
         [_schedule("aaa111", [_slot("10:11:00", old)])],
         live_override={"aaa111": {"entities": ["light.other"]}},
     )
     calls = _fake_scheduler_edit(hass)
 
-    result = await coordinator.async_replace_light(old, new, use_new_id=True)
+    result = await coordinator.async_replace_light(old, new, use_new_id=True, schedules_data=stored)
 
     assert calls == []
     assert result["entity_id"] == new  # the replace itself still succeeds
     manual = result["schedules"]["manual"]
     assert [m["schedule"] for m in manual] == ["switch.schedule_aaa111"]
-    assert "Scheduler hasn't saved" in manual[0]["detail"]
+    assert "doesn't match what Scheduler shows" in manual[0]["detail"]
 
 
 async def test_scheduler_refusing_the_edit_is_reported_not_raised(hass, coordinator):  # noqa: F811
     old, _ = await _adopted_old_light(hass, coordinator, state="on")
     new = _register_light(hass, "light.zigbee_bulb_7", "new-1")
-    _install(hass, [_schedule("aaa111", [_slot("10:11:00", old)])])
+    stored = _install(hass, [_schedule("aaa111", [_slot("10:11:00", old)])])
     _fake_scheduler_edit(hass, fail=True)
 
-    result = await coordinator.async_replace_light(old, new, use_new_id=True)
+    result = await coordinator.async_replace_light(old, new, use_new_id=True, schedules_data=stored)
 
     assert result["entity_id"] == new
     assert result["schedules"]["moved"] == 0
@@ -222,7 +210,7 @@ async def test_scheduler_refusing_the_edit_is_reported_not_raised(hass, coordina
 async def test_change_without_effect_in_scheduler_is_flagged(hass, coordinator):  # noqa: F811
     old, _ = await _adopted_old_light(hass, coordinator, state="on")
     new = _register_light(hass, "light.zigbee_bulb_7", "new-1")
-    _install(hass, [_schedule("aaa111", [_slot("10:11:00", old)])])
+    stored = _install(hass, [_schedule("aaa111", [_slot("10:11:00", old)])])
     _fake_scheduler_edit(hass, apply=False)
     schedules_mod_sleep = schedules.asyncio.sleep
 
@@ -231,7 +219,7 @@ async def test_change_without_effect_in_scheduler_is_flagged(hass, coordinator):
 
     schedules.asyncio.sleep = _fast
     try:
-        result = await coordinator.async_replace_light(old, new, use_new_id=True)
+        result = await coordinator.async_replace_light(old, new, use_new_id=True, schedules_data=stored)
     finally:
         schedules.asyncio.sleep = schedules_mod_sleep
 
@@ -240,10 +228,10 @@ async def test_change_without_effect_in_scheduler_is_flagged(hass, coordinator):
 
 async def test_change_entity_id_moves_schedules(hass, coordinator):  # noqa: F811
     old, _ = await _adopted_old_light(hass, coordinator, state="on")
-    _install(hass, [_schedule("aaa111", [_slot("10:11:00", old)])])
+    stored = _install(hass, [_schedule("aaa111", [_slot("10:11:00", old)])])
     calls = _fake_scheduler_edit(hass)
 
-    result = await coordinator.async_change_entity_id(old, "light.zb_kitchen_lamp", False)
+    result = await coordinator.async_change_entity_id(old, "light.zb_kitchen_lamp", stored)
 
     assert result["schedules"]["moved"] == 1
     assert calls[0]["timeslots"][0]["actions"][0]["entity_id"] == "light.zb_kitchen_lamp"
@@ -251,15 +239,15 @@ async def test_change_entity_id_moves_schedules(hass, coordinator):  # noqa: F81
 
 async def test_find_references_lists_schedules_as_automatic(hass, coordinator):  # noqa: F811
     old, _ = await _adopted_old_light(hass, coordinator, state="on")
-    _install(hass, [_schedule("aaa111", [_slot("10:11:00", old)])])
+    stored = _install(hass, [_schedule("aaa111", [_slot("10:11:00", old)])])
 
-    rows = await coordinator.async_find_references(old)
+    rows = await coordinator.async_find_references(old, stored)
 
     sched = [r for r in rows if r["kind"] == "schedule"]
     assert len(sched) == 1 and sched[0]["auto"] is True and sched[0]["always"] is True
 
 
-async def test_no_scheduler_storage_is_not_an_error(hass, coordinator):  # noqa: F811
+async def test_no_scheduler_data_is_not_an_error(hass, coordinator):  # noqa: F811
     old, _ = await _adopted_old_light(hass, coordinator, state="on")
     new = _register_light(hass, "light.zigbee_bulb_7", "new-1")
 
@@ -273,7 +261,7 @@ async def test_list_by_light_groups_schedules_under_each_light(hass, coordinator
     two = _slot("18:00:00", "light.lamp")
     two["actions"][0]["service_data"] = {"brightness_pct": 60}
     two["actions"].append({"service": "light.turn_on", "entity_id": "light.other", "service_data": {}})
-    _install(
+    stored = _install(
         hass,
         [
             _schedule("aaa111", [two, _slot("23:15:00", "light.lamp", service="light.turn_off")]),
@@ -282,7 +270,7 @@ async def test_list_by_light_groups_schedules_under_each_light(hass, coordinator
         ],
     )
 
-    result = await coordinator.async_list_schedules()
+    result = await coordinator.async_list_schedules(stored)
 
     assert set(result) == {"light.lamp", "light.other"}  # input_boolean is not a light
     lamp = {r["schedule"]: r for r in result["light.lamp"]}
@@ -297,14 +285,14 @@ async def test_list_by_light_groups_schedules_under_each_light(hass, coordinator
     assert [r["schedule"] for r in result["light.other"]] == ["switch.schedule_aaa111"]
 
 
-async def test_list_falls_back_to_live_attributes_when_file_is_out_of_date(hass, coordinator):  # noqa: F811
-    _install(
+async def test_list_falls_back_to_live_attributes_when_the_data_disagrees(hass, coordinator):  # noqa: F811
+    stored = _install(
         hass,
         [_schedule("aaa111", [_slot("10:11:00", "light.lamp")])],
         live_override={"aaa111": {"entities": ["light.lamp", "light.new_one"], "timeslots": ["10:11:00"]}},
     )
 
-    result = await coordinator.async_list_schedules()
+    result = await coordinator.async_list_schedules(stored)
 
     row = result["light.lamp"][0]
     assert row["approximate"] is True
@@ -312,7 +300,7 @@ async def test_list_falls_back_to_live_attributes_when_file_is_out_of_date(hass,
     assert "light.new_one" in result
 
 
-async def test_list_works_without_the_storage_file(hass, coordinator):  # noqa: F811
+async def test_list_works_without_scheduler_data(hass, coordinator):  # noqa: F811
     hass.states.async_set(
         "switch.schedule_abc123",
         "on",
@@ -322,3 +310,40 @@ async def test_list_works_without_the_storage_file(hass, coordinator):  # noqa: 
     result = await coordinator.async_list_schedules()
 
     assert result["light.lamp"][0]["approximate"] is True
+
+
+async def test_scheduler_files_are_never_read(hass, coordinator):  # noqa: F811
+    """1.1.0 (HACS review): Scheduler's own storage file is never opened."""
+    old, _ = await _adopted_old_light(hass, coordinator, state="on")
+    new = _register_light(hass, "light.zigbee_bulb_7", "new-1")
+    folder = os.path.join(hass.config.config_dir, ".storage")
+    os.makedirs(folder, exist_ok=True)
+    stored = [_schedule("aaa111", [_slot("10:11:00", old)])]
+    with open(os.path.join(folder, "scheduler.storage"), "w") as handle:
+        json.dump({"version": 3, "key": "scheduler.storage", "data": {"schedules": stored}}, handle)
+    hass.states.async_set("switch.schedule_aaa111", "on", {"entities": [old], "timeslots": ["10:11:00"]})
+    calls = _fake_scheduler_edit(hass)
+    try:
+        # Without the data from Scheduler's read API nothing is changed, only reported.
+        result = await coordinator.async_replace_light(old, new, use_new_id=True)
+        assert calls == []
+        assert result["schedules"]["moved"] == 0
+        listed = await coordinator.async_list_schedules()
+        assert listed[old][0]["approximate"] is True
+    finally:
+        os.remove(os.path.join(folder, "scheduler.storage"))
+
+
+async def test_bad_schedule_data_is_ignored(hass, coordinator):  # noqa: F811
+    hass.states.async_set("switch.schedule_abc123", "on", {"entities": ["light.lamp"], "timeslots": ["08:00:00"]})
+    result = await coordinator.async_list_schedules(["nonsense", {"schedule_id": 5}, {"schedule_id": "abc123"}])
+    assert result["light.lamp"][0]["approximate"] is True
+
+
+async def test_schedule_with_a_renamed_switch_is_matched_by_its_entity_id(hass, coordinator):  # noqa: F811
+    sched = _schedule("aaa111", [_slot("10:11:00", "light.lamp")])
+    sched["entity_id"] = "switch.morning_lights"
+    hass.states.async_set("switch.morning_lights", "on", {"entities": ["light.lamp"], "timeslots": ["10:11:00"]})
+    result = await coordinator.async_list_schedules([sched])
+    assert result["light.lamp"][0]["schedule"] == "switch.morning_lights"
+    assert result["light.lamp"][0]["approximate"] is False

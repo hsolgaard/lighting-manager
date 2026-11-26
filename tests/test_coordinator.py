@@ -838,22 +838,24 @@ async def test_replace_with_new_id_keeps_the_new_lights_own_id(
     assert coordinator.store.get_area_light_order(area.id) == [new_id, "light.other"]
 
 
-async def test_find_and_rewrite_references_in_yaml_files_and_dashboards(
+async def test_find_references_in_yaml_files_and_dashboards_is_read_only(
     hass: HomeAssistant, coordinator: LightingManagerCoordinator
 ) -> None:
+    """1.1.0 (HACS review): references are listed, never rewritten."""
     config_dir = hass.config.config_dir
     os.makedirs(config_dir, exist_ok=True)
     automations = os.path.join(config_dir, "automations.yaml")
+    original = (
+        "- alias: Lamp\n  action:\n    - service: light.turn_on\n"
+        "      target:\n        entity_id: light.cabinet_lamp\n"
+        "    - service: light.turn_on\n      target:\n        entity_id: light.cabinet_lamp_2\n"
+        "  condition: \"{{ is_state('light.cabinet_lamp','on') }}\"  # keep this comment\n"
+    )
     with open(automations, "w", encoding="utf-8") as fh:
-        fh.write(
-            "- alias: Lamp\n  action:\n    - service: light.turn_on\n"
-            "      target:\n        entity_id: light.cabinet_lamp\n"
-            "    - service: light.turn_on\n      target:\n        entity_id: light.cabinet_lamp_2\n"
-            "  condition: \"{{ is_state('light.cabinet_lamp','on') }}\"  # keep this comment\n"
-        )
+        fh.write(original)
     os.makedirs(os.path.join(config_dir, "custom_components"), exist_ok=True)
     with open(os.path.join(config_dir, "custom_components", "x.yaml"), "w") as fh:
-        fh.write("entity_id: light.cabinet_lamp\n")  # never touched
+        fh.write("entity_id: light.cabinet_lamp\n")
 
     saved = {}
 
@@ -873,23 +875,13 @@ async def test_find_and_rewrite_references_in_yaml_files_and_dashboards(
     assert by_kind[("yaml", "automations.yaml")]["count"] == 2  # not light.cabinet_lamp_2
     assert by_kind[("dashboard", "Dashboard: Home")]["count"] == 1
     assert not any("custom_components" in r["label"] for r in rows)
+    assert all(r["auto"] is False for r in rows)
 
     from custom_components.lighting_manager import references
 
-    report = await references.async_rewrite_references(hass, "light.cabinet_lamp", "light.zb_plug")
-
-    text = open(automations, encoding="utf-8").read()
-    assert "light.zb_plug" in text and text.count("light.zb_plug") == 2
-    assert "light.cabinet_lamp_2" in text  # a different light, untouched
-    assert "# keep this comment" in text
-    assert "light.cabinet_lamp'" not in text
-    assert report["changed"] == ["automations.yaml", "Dashboard: Home"]
-    assert saved["config"]["views"][0]["cards"][0]["entity"] == "light.zb_plug"
-    # Everything that was changed was copied to a backup first.
-    backup = os.path.join(config_dir, report["backup_dir"])
-    assert "light.cabinet_lamp\n" in open(os.path.join(backup, "automations.yaml")).read()
-    assert json.load(open(os.path.join(backup, "dashboards", "overview.json")))["title"] == "Home"
-    assert open(os.path.join(config_dir, "custom_components", "x.yaml")).read() == "entity_id: light.cabinet_lamp\n"
+    assert not hasattr(references, "async_rewrite_references")
+    assert open(automations, encoding="utf-8").read() == original
+    assert saved == {}
 
 
 async def test_references_reports_what_it_cannot_change(
@@ -912,16 +904,16 @@ async def test_change_entity_id_renames_and_updates_lighting_manager_lists(
     hass.states.async_remove(old)
 
     with pytest.raises(ValueError, match="already"):
-        await coordinator.async_change_entity_id(old, old, False)
+        await coordinator.async_change_entity_id(old, old)
     with pytest.raises(ValueError, match="type"):
-        await coordinator.async_change_entity_id(old, "switch.kitchen_plug", False)
+        await coordinator.async_change_entity_id(old, "switch.kitchen_plug")
     with pytest.raises(ValueError, match="lower-case"):
-        await coordinator.async_change_entity_id(old, "light.Kitchen Lamp", False)
+        await coordinator.async_change_entity_id(old, "light.Kitchen Lamp")
     other = _register_light(hass, "light.taken", "other-1")
     with pytest.raises(ValueError, match="in use"):
-        await coordinator.async_change_entity_id(old, other, False)
+        await coordinator.async_change_entity_id(old, other)
 
-    result = await coordinator.async_change_entity_id(old, "light.zb_kitchen_lamp", False)
+    result = await coordinator.async_change_entity_id(old, "light.zb_kitchen_lamp")
 
     assert result["entity_id"] == "light.zb_kitchen_lamp"
     assert er.async_get(hass).async_get("light.zb_kitchen_lamp").unique_id == "old-1"

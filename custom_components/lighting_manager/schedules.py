@@ -5,16 +5,19 @@ Scheduler stores the entity ID as plain text inside each schedule's actions
 replaced, or its ID changes, its schedules would silently keep pointing at
 the old light.
 
-How this works, and why it is built this way:
+How this works (1.1.0), and why it is built this way:
 
-- Scheduler has no public "read a schedule" call, but it keeps every schedule
-  in .storage/scheduler.storage. We only READ that file (never write it).
-  Writing is done through Scheduler's own public service, scheduler.edit, so
+- Lighting Manager never opens Scheduler's own files. The full schedule data
+  comes from Scheduler's public read API: its `scheduler` websocket command,
+  the same one the Scheduler card uses. The Lighting Manager panel reads it
+  as the signed-in administrator and passes it along with the request
+  (`schedules`). Without it, only the public switch.schedule_* attributes
+  are used: enough to list schedules, not enough to change one safely.
+- Before trusting a schedule we compare it with what the live
+  switch.schedule_* entity reports (targets, number of time slots, on/off).
+  If they disagree the schedule is left alone and reported, never guessed at.
+- Writing is done through Scheduler's own public service, scheduler.edit, so
   Scheduler stays in charge of its data and re-arms its timers itself.
-- The file is saved with a short delay. Before trusting a schedule we compare
-  it with what the live switch.schedule_* entity reports (targets, number of
-  time slots, on/off). If they disagree the schedule is left alone and
-  reported, never guessed at.
 - Before anything is edited, the affected schedules are copied to
   lighting_manager_backups/<time>/schedules.json.
 - After the edit we check the live entity again, and report schedule by
@@ -39,7 +42,6 @@ from .references import BACKUP_DIR_NAME
 
 _LOGGER = logging.getLogger(__name__)
 
-STORAGE_PATH = ".storage/scheduler.storage"
 SWITCH_PREFIX = "switch.schedule_"
 
 # The fields scheduler.edit accepts for a time slot. Empty / null ones must be
@@ -50,14 +52,25 @@ _SLOT_KEYS = ("start", "stop", "conditions", "condition_type", "track_conditions
 # -- reading Scheduler's data -------------------------------------------------
 
 
-def _read_storage(path: str) -> list[dict[str, Any]] | None:
-    try:
-        with open(path, encoding="utf-8") as handle:
-            raw = json.load(handle)
-    except (OSError, ValueError):
+def clean_schedules(value: Any) -> list[dict[str, Any]] | None:
+    """The schedules the panel read from Scheduler's public API, or None.
+
+    Only well-formed entries are kept; every one is still checked against
+    the live switch.schedule_* entity before it is used (see _disagreement).
+    """
+    if not isinstance(value, list):
         return None
-    schedules = (raw.get("data") or {}).get("schedules")
-    return schedules if isinstance(schedules, list) else None
+    out: list[dict[str, Any]] = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        schedule_id = item.get("schedule_id")
+        if not isinstance(schedule_id, str) or not schedule_id:
+            continue
+        if not isinstance(item.get("timeslots"), list):
+            continue
+        out.append(item)
+    return out
 
 
 def _ids(value: Any) -> list[str]:
@@ -88,21 +101,25 @@ def _mentions(schedule: dict[str, Any], entity_id: str) -> bool:
 
 
 def _switch_id(schedule: dict[str, Any]) -> str:
+    # Scheduler's read API includes the switch's entity ID (it can be renamed).
+    entity_id = schedule.get("entity_id")
+    if isinstance(entity_id, str) and entity_id.startswith("switch."):
+        return entity_id
     return f"{SWITCH_PREFIX}{schedule.get('schedule_id')}"
 
 
 def _disagreement(schedule: dict[str, Any], state) -> str | None:
-    """Why the saved file can't be trusted for this schedule right now (None = it matches)."""
+    """Why this schedule data can't be trusted right now (None = it matches the live entity)."""
     if state is None:
         return "its Scheduler entity isn't loaded"
     live = {e for e in (state.attributes.get("entities") or []) if isinstance(e, str)}
     if live != _action_entities(schedule):
-        return "it was changed a moment ago and Scheduler hasn't saved it yet"
+        return "it doesn't match what Scheduler shows right now"
     live_slots = state.attributes.get("timeslots") or []
     if len(live_slots) != len(schedule.get("timeslots") or []):
-        return "it was changed a moment ago and Scheduler hasn't saved it yet"
+        return "it doesn't match what Scheduler shows right now"
     if state.state not in ("on", "off") or (state.state == "on") != bool(schedule.get("enabled", True)):
-        return "it was changed a moment ago and Scheduler hasn't saved it yet"
+        return "it doesn't match what Scheduler shows right now"
     return None
 
 
@@ -194,7 +211,7 @@ def _rows_from_stored(schedule: dict[str, Any], switch_id: str, state) -> dict[s
 
 
 def _rows_from_live(state) -> dict[str, dict[str, Any]]:
-    """Best effort from the live entity alone (used when the saved file isn't trustworthy yet)."""
+    """Best effort from the live entity's public attributes alone."""
     attrs = state.attributes
     targets = {e for e in (attrs.get("entities") or []) if isinstance(e, str) and e.split(".")[0] in ("light", "switch")}
     services = [a.get("service", "") for a in (attrs.get("actions") or []) if isinstance(a, dict)]
@@ -216,15 +233,20 @@ def _rows_from_live(state) -> dict[str, dict[str, Any]]:
     return rows
 
 
-async def async_list_by_light(hass: HomeAssistant) -> dict[str, list[dict[str, Any]]]:
-    """Every Scheduler schedule, grouped under the lights it acts on. Read-only."""
-    stored = await hass.async_add_executor_job(_read_storage, hass.config.path(STORAGE_PATH))
-    by_id = {s.get("schedule_id"): s for s in stored or []}
+async def async_list_by_light(
+    hass: HomeAssistant, stored: list[dict[str, Any]] | None = None
+) -> dict[str, list[dict[str, Any]]]:
+    """Every Scheduler schedule, grouped under the lights it acts on. Read-only.
+
+    stored: the schedules from Scheduler's public read API (see the module
+    docstring); without it each row comes from the live entity alone.
+    """
+    by_switch = {_switch_id(s): s for s in stored or []}
     result: dict[str, list[dict[str, Any]]] = {}
     for state in hass.states.async_all("switch"):
-        if not state.entity_id.startswith(SWITCH_PREFIX):
+        schedule = by_switch.get(state.entity_id)
+        if schedule is None and not state.entity_id.startswith(SWITCH_PREFIX):
             continue
-        schedule = by_id.get(state.entity_id[len(SWITCH_PREFIX):])
         if schedule is not None and _disagreement(schedule, state) is None:
             rows = _rows_from_stored(schedule, state.entity_id, state)
         else:
@@ -272,16 +294,19 @@ def _scan(hass: HomeAssistant, coordinator, entity_id: str, stored: list[dict] |
     return rows
 
 
-async def async_snapshot(hass: HomeAssistant, coordinator, entity_id: str) -> list[dict[str, Any]]:
+async def async_snapshot(
+    hass: HomeAssistant, coordinator, entity_id: str, stored: list[dict[str, Any]] | None = None
+) -> list[dict[str, Any]]:
     """Schedules that use entity_id, captured BEFORE the light is changed."""
-    stored = await hass.async_add_executor_job(_read_storage, hass.config.path(STORAGE_PATH))
     return _scan(hass, coordinator, entity_id, stored)
 
 
-async def async_scan_rows(hass: HomeAssistant, coordinator, entity_id: str) -> list[dict[str, Any]]:
+async def async_scan_rows(
+    hass: HomeAssistant, coordinator, entity_id: str, stored: list[dict[str, Any]] | None = None
+) -> list[dict[str, Any]]:
     """Rows for the 'what uses this ID' list in the dialogs."""
     rows = []
-    for snap in await async_snapshot(hass, coordinator, entity_id):
+    for snap in await async_snapshot(hass, coordinator, entity_id, stored):
         if snap["schedule"] is not None:
             note = "Moved to the new light automatically. The schedule keeps its days, times and on/off state."
         else:
